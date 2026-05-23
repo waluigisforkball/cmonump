@@ -1,203 +1,214 @@
 """
-fetch.py — Pull ABS-challenge pitch data from Baseball Savant and find the
-single most embarrassing overturned call for a given date window.
+fetch.py — Find the most embarrassing overturned ABS challenge in a date window,
+using the official MLB Stats API live feed (statsapi.mlb.com).
 
-The "SMH ump" angle: a call was challenged and OVERTURNED, ranked by how badly
-the pitch missed the nearest edge of the strike zone (in inches).
+Confirmed structure (from feed inspection, 2026):
+  liveData.plays.allPlays[].playEvents[]  -> pitch events
+    .isPitch == True
+    .details.call.{code,description}      -> the ON-FIELD call (before overturn)
+    .details.hasReview == True            -> this pitch was challenged
+    .reviewDetails.isOverturned == True   -> the call was reversed
+    .reviewDetails.reviewType == "MJ"     -> ABS challenge (not a replay review)
+    .reviewDetails.challengeTeamId        -> who challenged
+    .pitchData.coordinates.{pX,pZ}        -> pitch location (feet)
+    .pitchData.{strikeZoneTop,strikeZoneBottom}  -> batter zone (feet)
+  allPlays[].result.description           -> ready-made human sentence
+  allPlays[].matchup.{pitcher,batter}     -> names
+  allPlays[].about.{inning,halfInning}    -> situation
 
-NOTE ON COLUMN MAPPING: Savant added challenge fields for the 2026 season.
-This module is defensive about exactly *which* columns carry that data, because
-the precise names couldn't be confirmed offline. Run `python fetch.py --inspect`
-once against live data to print the real columns, then (if needed) adjust
-CHALLENGE_COLS / OVERTURN_VALUES below. Everything else is stable Statcast schema.
+"SMH ump" angle = a CALLED STRIKE overturned to a ball (hitter robbed),
+ranked by how far the pitch missed the nearest zone edge, in inches.
 """
 
 from __future__ import annotations
 import argparse
 import datetime as dt
+import json
+import sys
+import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Optional
-import io
-import sys
 
-import pandas as pd
+SCHED = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={date}"
+FEED = "https://statsapi.mlb.com/api/v1.1/game/{pk}/feed/live"
 
-# pybaseball wraps the Savant statcast_search/csv endpoint
-from pybaseball import statcast
-
-# --- Zone constants (2026 ABS) -------------------------------------------------
-# The ABS zone is a 2D rectangle at the midpoint of the plate, 17 inches wide.
-# Statcast plate_x / plate_z and sz_top / sz_bot are all in FEET.
-PLATE_HALF_WIDTH_FT = (17.0 / 2.0) / 12.0   # 8.5 inches -> feet
+PLATE_HALF_WIDTH_FT = (17.0 / 2.0) / 12.0   # 8.5 inches in feet
 FT_TO_IN = 12.0
+ABS_REVIEW_TYPE = "MJ"   # ABS challenge (replay reviews use other codes)
 
-# --- Defensive column detection ------------------------------------------------
-# Candidate column names that might flag a challenge / its result. The first one
-# present in the data wins. Update after running --inspect if 2026 differs.
-CHALLENGE_FLAG_COLS = ["is_challenge", "challenge", "abs_challenge", "challenged"]
-CHALLENGE_RESULT_COLS = ["challenge_result", "abs_result", "overturned", "call_overturned"]
-# Values (lowercased) in a result column that mean "the call got reversed":
-OVERTURN_VALUES = {"overturned", "overturn", "reversed", "true", "1", "yes", "won"}
+
+def _get(url: str) -> dict:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read().decode())
 
 
 @dataclass
 class DunkCall:
     game_date: str
     game_pk: int
+    play_id: str
     pitcher: str
     batter: str
     balls: int
     strikes: int
     inning: int
     half: str
-    original_call: str          # what was called before the challenge
-    miss_inches: float          # how far outside the nearest zone edge
-    miss_dir: str               # 'inside/outside/high/low'
-    plate_x: float
-    plate_z: float
+    original_call: str       # e.g. "Called Strike"
+    description: str         # MLB's ready-made sentence
+    miss_inches: float
+    miss_dir: str
+    pX: float
+    pZ: float
     sz_top: float
     sz_bot: float
-    pitch_type: str
     savant_link: str
 
     def headline_miss(self) -> str:
-        return f"{self.miss_inches:.1f}\""
+        return f'{self.miss_inches:.1f}"'
 
 
-def _detect_col(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-
-def _miss_distance_inches(row) -> tuple[float, str]:
-    """Distance (inches) the pitch center sat OUTSIDE the nearest zone edge.
-    Returns (distance, direction). 0 if the pitch was actually inside the zone."""
-    px, pz = row["plate_x"], row["plate_z"]
-    top, bot = row["sz_top"], row["sz_bot"]
-
-    # horizontal miss: outside the 8.5" half-width either side
-    if px > PLATE_HALF_WIDTH_FT:
-        h_miss = (px - PLATE_HALF_WIDTH_FT) * FT_TO_IN
-        h_dir = "outside" if row.get("stand") == "L" else "inside"
-        # (handedness flips arm-side label; kept simple — see note)
-        h_dir = "arm-side" if False else "wide"
-    elif px < -PLATE_HALF_WIDTH_FT:
-        h_miss = (-PLATE_HALF_WIDTH_FT - px) * FT_TO_IN
-        h_dir = "wide"
+def _miss_distance_inches(pX, pZ, top, bot):
+    """Largest single-axis distance (inches) the pitch sat OUTSIDE the zone."""
+    hw = PLATE_HALF_WIDTH_FT
+    if pX > hw:
+        h_miss, h_dir = (pX - hw) * FT_TO_IN, "wide"
+    elif pX < -hw:
+        h_miss, h_dir = (-hw - pX) * FT_TO_IN, "wide"
     else:
-        h_miss = 0.0
-        h_dir = ""
+        h_miss, h_dir = 0.0, ""
 
-    # vertical miss
-    if pz > top:
-        v_miss = (pz - top) * FT_TO_IN
-        v_dir = "high"
-    elif pz < bot:
-        v_miss = (bot - pz) * FT_TO_IN
-        v_dir = "low"
+    if pZ > top:
+        v_miss, v_dir = (pZ - top) * FT_TO_IN, "high"
+    elif pZ < bot:
+        v_miss, v_dir = (bot - pZ) * FT_TO_IN, "low"
     else:
-        v_miss = 0.0
-        v_dir = ""
+        v_miss, v_dir = 0.0, ""
 
-    # the "obviousness" is the largest single-axis miss
     if h_miss >= v_miss:
         return h_miss, (h_dir or "off the plate")
     return v_miss, (v_dir or "off the zone")
 
 
-def _savant_link(game_pk: int) -> str:
-    # Stable, constructable gamefeed URL for the play. (mlb.com video URLs are
-    # NOT reliably constructable, so we link to Savant's per-game feed.)
-    return f"https://baseballsavant.mlb.com/gamefeed?gamePk={game_pk}"
+def _savant_link(pk: int) -> str:
+    return f"https://baseballsavant.mlb.com/gamefeed?gamePk={pk}"
 
 
-def fetch_window(start: str, end: str, inspect: bool = False) -> Optional[DunkCall]:
-    """Pull all pitches in [start, end] (inclusive, YYYY-MM-DD), return the worst
-    overturned-challenge call, or None if there were no overturned challenges."""
-    df = statcast(start_dt=start, end_dt=end, verbose=False)
-    if df is None or len(df) == 0:
-        print(f"[fetch] No statcast rows for {start}..{end}", file=sys.stderr)
-        return None
+def _game_pks(date: str):
+    sched = _get(SCHED.format(date=date))
+    pks = []
+    for d in sched.get("dates", []):
+        for g in d.get("games", []):
+            pks.append(g["gamePk"])
+    return pks
+
+
+def _overturned_strikes_in_game(pk: int):
+    """All 'called strike -> overturned to ball' ABS challenges in a game."""
+    try:
+        feed = _get(FEED.format(pk=pk))
+    except Exception as e:
+        print(f"[fetch] feed error for {pk}: {e}", file=sys.stderr)
+        return []
+
+    game_date = (feed.get("gameData", {}).get("datetime", {})
+                 .get("officialDate", ""))
+    plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
+    out = []
+
+    for play in plays:
+        matchup = play.get("matchup", {})
+        about = play.get("about", {})
+        result_desc = play.get("result", {}).get("description", "") or ""
+
+        for ev in play.get("playEvents", []):
+            if not ev.get("isPitch"):
+                continue
+            details = ev.get("details", {})
+            if not details.get("hasReview"):
+                continue
+            rev = ev.get("reviewDetails", {})
+            if not rev:
+                continue
+            if rev.get("reviewType") != ABS_REVIEW_TYPE:
+                continue          # skip non-ABS replay reviews
+            if not rev.get("isOverturned"):
+                continue          # only overturns (the embarrassing ones)
+
+            call = details.get("call", {}).get("description", "") or \
+                details.get("description", "")
+            # "SMH ump" angle: on-field call was a STRIKE, overturned to ball
+            if "strike" not in call.lower():
+                continue
+
+            pdat = ev.get("pitchData", {})
+            coords = pdat.get("coordinates", {})
+            pX = coords.get("pX")
+            pZ = coords.get("pZ")
+            top = pdat.get("strikeZoneTop")
+            bot = pdat.get("strikeZoneBottom")
+            if None in (pX, pZ, top, bot):
+                continue
+
+            miss, mdir = _miss_distance_inches(pX, pZ, top, bot)
+            cnt = ev.get("count", {})
+
+            out.append(DunkCall(
+                game_date=game_date,
+                game_pk=pk,
+                play_id=str(ev.get("playId", "")),
+                pitcher=matchup.get("pitcher", {}).get("fullName", "Pitcher"),
+                batter=matchup.get("batter", {}).get("fullName", "Batter"),
+                balls=int(cnt.get("balls", 0)),
+                strikes=int(cnt.get("strikes", 0)),
+                inning=int(about.get("inning", 0)),
+                half=str(about.get("halfInning", "")),
+                original_call=call or "Called Strike",
+                description=result_desc,
+                miss_inches=float(miss),
+                miss_dir=mdir,
+                pX=float(pX), pZ=float(pZ),
+                sz_top=float(top), sz_bot=float(bot),
+                savant_link=_savant_link(pk),
+            ))
+    return out
+
+
+def fetch_window(start: str, end: str, inspect: bool = False):
+    """start/end inclusive YYYY-MM-DD. Returns the single worst overturned called
+    strike across all games in the window, or None."""
+    d0 = dt.date.fromisoformat(start)
+    d1 = dt.date.fromisoformat(end)
+    all_calls = []
+    day = d0
+    while day <= d1:
+        pks = _game_pks(day.isoformat())
+        print(f"[fetch] {day} -> {len(pks)} games", file=sys.stderr)
+        for pk in pks:
+            all_calls.extend(_overturned_strikes_in_game(pk))
+        day += dt.timedelta(days=1)
 
     if inspect:
-        chal_like = [c for c in df.columns
-                     if any(k in c.lower() for k in ("challenge", "abs", "overturn"))]
-        print("=== INSPECT: columns that look challenge-related ===")
-        print(chal_like or "(none found — check description / des columns)")
-        print("\n=== unique 'description' values (call types) ===")
-        if "description" in df.columns:
-            print(sorted(df["description"].dropna().unique().tolist()))
-        print(f"\nTotal columns: {len(df.columns)} | Total rows: {len(df)}")
+        print(f"=== {len(all_calls)} overturned called-strikes in window ===")
+        for c in sorted(all_calls, key=lambda x: x.miss_inches, reverse=True)[:10]:
+            print(f'  {c.miss_inches:5.1f}"  {c.pitcher} -> {c.batter}  '
+                  f"({c.balls}-{c.strikes}, {c.half} {c.inning})  "
+                  f"{c.description[:80]}")
         return None
 
-    flag_col = _detect_col(df, CHALLENGE_FLAG_COLS)
-    result_col = _detect_col(df, CHALLENGE_RESULT_COLS)
-
-    # Filter to overturned challenges. Strategy depends on what columns exist.
-    if result_col:
-        mask = df[result_col].astype(str).str.lower().isin(OVERTURN_VALUES)
-        challenged = df[mask].copy()
-    elif flag_col:
-        # only a flag, no result column — fall back to flag + we infer overturn
-        # by the call being a strike that the pitch location says was a ball.
-        challenged = df[df[flag_col].astype(str).str.lower().isin(
-            {"true", "1", "yes"})].copy()
-    else:
-        # No challenge columns surfaced. Last-resort: look in description text.
-        if "description" in df.columns:
-            challenged = df[df["description"].astype(str)
-                            .str.contains("challenge", case=False, na=False)].copy()
-        else:
-            print("[fetch] Could not locate challenge data. Run --inspect.",
-                  file=sys.stderr)
-            return None
-
-    if len(challenged) == 0:
-        print(f"[fetch] No overturned challenges in {start}..{end}", file=sys.stderr)
+    if not all_calls:
+        print(f"[fetch] no overturned called-strikes in {start}..{end}",
+              file=sys.stderr)
         return None
 
-    # need location + zone to score; drop rows missing them
-    need = ["plate_x", "plate_z", "sz_top", "sz_bot"]
-    challenged = challenged.dropna(subset=need)
-    if len(challenged) == 0:
-        return None
-
-    # score each
-    misses = challenged.apply(_miss_distance_inches, axis=1, result_type="expand")
-    challenged["miss_inches"] = misses[0]
-    challenged["miss_dir"] = misses[1]
-
-    worst = challenged.sort_values("miss_inches", ascending=False).iloc[0]
-
-    return DunkCall(
-        game_date=str(worst.get("game_date", end))[:10],
-        game_pk=int(worst.get("game_pk", 0)),
-        pitcher=str(worst.get("player_name", "Pitcher")),
-        batter=str(worst.get("batter_name", worst.get("des", "Batter"))),
-        balls=int(worst.get("balls", 0)),
-        strikes=int(worst.get("strikes", 0)),
-        inning=int(worst.get("inning", 0)),
-        half=str(worst.get("inning_topbot", "")),
-        original_call=str(worst.get("description", "called pitch")),
-        miss_inches=float(worst["miss_inches"]),
-        miss_dir=str(worst["miss_dir"]),
-        plate_x=float(worst["plate_x"]),
-        plate_z=float(worst["plate_z"]),
-        sz_top=float(worst["sz_top"]),
-        sz_bot=float(worst["sz_bot"]),
-        pitch_type=str(worst.get("pitch_type", "")),
-        savant_link=_savant_link(int(worst.get("game_pk", 0))),
-    )
+    return max(all_calls, key=lambda c: c.miss_inches)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--window", choices=["day", "week"], default="day")
-    ap.add_argument("--date", help="anchor date YYYY-MM-DD (default: yesterday)")
-    ap.add_argument("--inspect", action="store_true",
-                    help="print live column names to confirm 2026 challenge fields")
+    ap.add_argument("--date")
+    ap.add_argument("--inspect", action="store_true")
     args = ap.parse_args()
 
     anchor = (dt.date.fromisoformat(args.date) if args.date
@@ -212,9 +223,8 @@ def main():
     if args.inspect:
         return
     if call is None:
-        print("NO_DUNK")  # signal for main.py
+        print("NO_DUNK")
         return
-    import json
     print(json.dumps(asdict(call)))
 
 
