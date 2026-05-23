@@ -244,6 +244,26 @@ def fetch_window(start: str, end: str, inspect: bool = False):
     return max(all_calls, key=lambda c: c.miss_inches)
 
 
+def fetch_window_top_n(start: str, end: str, n: int = 3):
+    """Return the top-n worst overturned called strikes in the window, ranked
+    by miss distance (descending). Fewer than n if the week was thin."""
+    d0 = dt.date.fromisoformat(start)
+    d1 = dt.date.fromisoformat(end)
+    all_calls = []
+    day = d0
+    while day <= d1:
+        pks = _game_pks(day.isoformat())
+        print(f"[fetch] {day} -> {len(pks)} games", file=sys.stderr)
+        for pk in pks:
+            all_calls.extend(_overturned_strikes_in_game(pk))
+        day += dt.timedelta(days=1)
+    if not all_calls:
+        print(f"[fetch] no overturned called-strikes in {start}..{end}",
+              file=sys.stderr)
+        return []
+    return sorted(all_calls, key=lambda c: c.miss_inches, reverse=True)[:n]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--window", choices=["day", "week"], default="day")
