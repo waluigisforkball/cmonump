@@ -27,6 +27,11 @@ on:
         required: false
         default: false
         type: boolean
+      reviewinspect:
+        description: "review inspector (dump every reviewed pitch, no post)"
+        required: false
+        default: false
+        type: boolean
       date:
         description: "anchor date YYYY-MM-DD (blank = yesterday)"
         required: false
@@ -53,6 +58,7 @@ jobs:
           IN_DATE: ${{ github.event.inputs.date }}
           IN_INSPECT: ${{ github.event.inputs.inspect }}
           IN_FEEDINSPECT: ${{ github.event.inputs.feedinspect }}
+          IN_REVIEWINSPECT: ${{ github.event.inputs.reviewinspect }}
           IN_DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: python ci_run.py
       - name: Upload card
