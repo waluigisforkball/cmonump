@@ -1,0 +1,4 @@
+pybaseball>=2.2.7
+matplotlib>=3.7
+atproto>=0.0.55
+pandas>=2.0
