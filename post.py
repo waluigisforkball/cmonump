@@ -26,9 +26,9 @@ def build_caption(call: dict, window: str) -> str:
     line1 = f"SMH Call {tag} \U0001F926"   # facepalm
     line2 = (f'{call["pitcher"]} vs {call["batter"]}, '
              f'{call["balls"]}-{call["strikes"]} in the {half} of {inn}.')
-    who = f"{ump} called" if ump else "Called"
-    line3 = (f'{who} a strike that was {miss:.1f}" {dir_word} the zone. '
-             f'Challenged, overturned, announced to everybody.')
+    who = ump if ump else "Blue"
+    line3 = (f'{who} called this {miss:.1f}" {dir_word} the zone a strike. '
+             f'It was not.')
     return f"{line1}\n{line2}\n{line3}\n\n{call['savant_link']}\n#MLB #ABS"
 
 
