@@ -27,6 +27,14 @@ def main():
         runpy.run_path("inspect_feed.py", run_name="__main__")
         return 0
 
+    if _truthy(os.environ.get("IN_REVIEWINSPECT")):
+        import runpy, sys as _sys
+        date = os.environ.get("IN_DATE") or (
+            dt.date.today() - dt.timedelta(days=1)).isoformat()
+        _sys.argv = ["inspect_reviews.py", date]
+        runpy.run_path("inspect_reviews.py", run_name="__main__")
+        return 0
+
     if event == "schedule":
         # weekly cron is the Monday 15:00 UTC one; everything else = daily
         cron = os.environ.get("CRON", "")
