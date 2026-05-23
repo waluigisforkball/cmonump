@@ -1,1 +1,51 @@
+name: ABS Dunk Bot
 
+on:
+  schedule:
+    - cron: "0 14 * * *"
+    - cron: "0 15 * * 1"
+  workflow_dispatch:
+    inputs:
+      window:
+        description: "day or week"
+        required: true
+        default: "day"
+        type: choice
+        options: [day, week]
+      dry_run:
+        description: "dry run (build but do not post)"
+        required: false
+        default: true
+        type: boolean
+      inspect:
+        description: "inspect mode (print Savant columns, no post)"
+        required: false
+        default: false
+        type: boolean
+      date:
+        description: "anchor date YYYY-MM-DD (blank = yesterday)"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Decide window
+        id: win
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ github.event.schedule }}" = "0 15 * * 1" ]; then
+              echo "window=week" >> "$GITHUB_OUTPUT"
+            else
+              echo "window=day" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "
