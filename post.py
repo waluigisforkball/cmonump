@@ -43,6 +43,42 @@ def build_caption(call: dict, window: str) -> str:
     return f"{line1}\n{line2}\n{line3}\n\n{call['savant_link']}\n#MLB #ABS"
 
 
+def build_caption_weekly(calls: list, date_range: str = "") -> str:
+    """Caption for the weekly top-3 card."""
+    head = "\U0001F926 Worst Calls of the Week"
+    if date_range:
+        head += f" ({date_range})"
+    lines = [head, ""]
+    medals = ["1.", "2.", "3."]
+    for i, c in enumerate(calls[:3]):
+        mdir = str(c.get("miss_dir", "")).lower()
+        dword = ("above" if "high" in mdir else "below" if "low" in mdir else "off")
+        ump = str(c.get("ump", "") or "").strip() or "Blue"
+        lines.append(f'{medals[i]} {ump} — {c["miss_inches"]:.1f}" {dword} the zone')
+    body = "\n".join(lines)
+    tail = "\n\n#MLB #ABS"
+    cap = body + tail
+    return cap[:297] + "..." if len(cap) > 300 else cap
+
+
+def post_text_image(caption: str, image_path: str, alt_call: dict):
+    handle = os.environ.get("BLUESKY_HANDLE")
+    app_pw = os.environ.get("BLUESKY_APP_PASSWORD")
+    if not handle or not app_pw:
+        print("[post] Missing BLUESKY creds.", file=sys.stderr)
+        return None
+    client = Client()
+    client.login(handle, app_pw)
+    with open(image_path, "rb") as f:
+        img_bytes = f.read()
+    alt = ("Weekly card ranking the three worst overturned ABS challenge calls, "
+           "each shown as a strike-zone graphic with the miss distance.")
+    resp = client.send_image(text=caption, image=img_bytes, image_alt=alt)
+    uri = getattr(resp, "uri", None)
+    print(f"[post] posted: {uri}")
+    return uri
+
+
 def post(call: dict, image_path: str, window: str) -> Optional[str]:  # noqa
     handle = os.environ.get("BLUESKY_HANDLE")
     app_pw = os.environ.get("BLUESKY_APP_PASSWORD")
