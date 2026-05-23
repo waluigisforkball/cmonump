@@ -18,6 +18,15 @@ def _truthy(v: str) -> bool:
 def main():
     event = os.environ.get("EVENT_NAME", "workflow_dispatch")
 
+    # one-time feed-structure inspector (temporary)
+    if _truthy(os.environ.get("IN_FEEDINSPECT")):
+        import runpy, sys as _sys
+        date = os.environ.get("IN_DATE") or (
+            dt.date.today() - dt.timedelta(days=1)).isoformat()
+        _sys.argv = ["inspect_feed.py", date]
+        runpy.run_path("inspect_feed.py", run_name="__main__")
+        return 0
+
     if event == "schedule":
         # weekly cron is the Monday 15:00 UTC one; everything else = daily
         cron = os.environ.get("CRON", "")
