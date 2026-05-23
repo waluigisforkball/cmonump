@@ -84,7 +84,9 @@ def render(call: dict, out_path: str) -> str:
     title = f"SMH, {ump.upper()}." if ump else "SMH, BLUE."
     _fit_text(ax, 0.5, 0.945, title, fontsize=30, weight="black",
               color=ACCENT, fam=fam, max_frac=0.92)
-    sub = f"Missed by {miss:.1f}\" - challenged, overturned, announced to everyone"
+    _dirw = {"high": "above", "low": "below", "wide": "off"}.get(
+        mdir.split()[0] if mdir else "", "off")
+    sub = f"Called a strike. It was {miss:.1f}\" {_dirw} the zone."
     _fit_text(ax, 0.5, 0.885, sub, fontsize=10.5, weight="bold",
               color=MUTED, fam=fam, max_frac=0.96)
 
@@ -126,37 +128,40 @@ def render(call: dict, out_path: str) -> str:
         ax.plot([bx0, bx1], [by0 + (by1-by0)*f]*2, color=DIM, lw=0.8,
                 alpha=0.5, zorder=3)
 
-    # pitch dot — map then CLAMP into a safe inner margin so it never leaves canvas
+    # pitch dot — sized to a REAL baseball (2.9" diameter) at the zone's scale,
+    # so the visual is honest about how far it missed.
+    BALL_RADIUS_FT = (2.9 / 2.0) / 12.0      # 1.45 inches -> feet
+    dot_r = BALL_RADIUS_FT * s               # same feet->axes scale as the zone
     dot_x = fx(px); dot_y = fy(pz)
-    MARGIN = 0.10
+    MARGIN = dot_r + 0.02
     dot_x = min(max(dot_x, MARGIN), 1 - MARGIN)
-    dot_y = min(max(dot_y, ZY0 - 0.06), ZY1 + 0.06)  # keep within zone band-ish
     dot_y = min(max(dot_y, 0.24), 0.76)
-    ax.add_patch(Circle((dot_x, dot_y), 0.032, facecolor=ACCENT,
-                 edgecolor=INK, linewidth=3, zorder=5))
+    ax.add_patch(Circle((dot_x, dot_y), dot_r, facecolor=ACCENT,
+                 edgecolor=INK, linewidth=2.5, zorder=5))
 
     # leader + miss label: pick nearest edge based on miss direction
     if "high" in mdir or "low" in mdir:
         edge_y = by1 if "high" in mdir else by0
         ex = min(max(dot_x, bx0), bx1)
-        gap = 0.045
+        gap = dot_r + 0.012
         sy_stop = dot_y - gap if dot_y > edge_y else dot_y + gap
-        ax.annotate("", xy=(ex, sy_stop), xytext=(ex, edge_y),
-                    arrowprops=dict(arrowstyle="-", linestyle=(0, (4, 3)),
-                                    color=ACCENT, lw=2), zorder=4)
-        ax.text(ex + 0.06, (edge_y + sy_stop) / 2, f'{miss:.1f}"',
-                ha="left", va="center", fontsize=11, fontweight="black",
+        if abs(sy_stop - edge_y) > 0.01:
+            ax.annotate("", xy=(ex, sy_stop), xytext=(ex, edge_y),
+                        arrowprops=dict(arrowstyle="-", linestyle=(0, (4, 3)),
+                                        color=ACCENT, lw=2), zorder=4)
+        ax.text(dot_x + dot_r + 0.03, dot_y, f'{miss:.1f}"',
+                ha="left", va="center", fontsize=12, fontweight="black",
                 color=ACCENT, family=fam, zorder=6)
     else:  # wide
         edge_x = bx1 if dot_x > zcx else bx0
-        gap = 0.05
+        gap = dot_r + 0.012
         sx_stop = dot_x - gap if dot_x > edge_x else dot_x + gap
-        ax.annotate("", xy=(sx_stop, dot_y), xytext=(edge_x, dot_y),
-                    arrowprops=dict(arrowstyle="-", linestyle=(0, (4, 3)),
-                                    color=ACCENT, lw=2), zorder=4)
-        # place label above the dot, offset enough to clear the 0.032 radius
-        ax.text(dot_x, dot_y + 0.075, f'{miss:.1f}"',
-                ha="center", va="bottom", fontsize=11, fontweight="black",
+        if abs(sx_stop - edge_x) > 0.01:
+            ax.annotate("", xy=(sx_stop, dot_y), xytext=(edge_x, dot_y),
+                        arrowprops=dict(arrowstyle="-", linestyle=(0, (4, 3)),
+                                        color=ACCENT, lw=2), zorder=4)
+        ax.text(dot_x, dot_y + dot_r + 0.03, f'{miss:.1f}"',
+                ha="center", va="bottom", fontsize=12, fontweight="black",
                 color=ACCENT, family=fam, zorder=6)
 
     # ===== FOOTER BAND =====
@@ -167,6 +172,11 @@ def render(call: dict, out_path: str) -> str:
     inn = call.get("inning", "")
     count = f'{call.get("balls", 0)}-{call.get("strikes", 0)} count'
     situ = f'{half} {inn}  -  {count}'.strip()
+    # add the score if we have team abbreviations
+    at, ht = call.get("away_team"), call.get("home_team")
+    if at and ht:
+        situ += (f'  -  {at} {call.get("away_score", 0)}, '
+                 f'{ht} {call.get("home_score", 0)}')
     _fit_text(ax, 0.5, 0.055, situ, fontsize=9.5, weight="bold",
               color=DIM, fam=fam, max_frac=0.9)
 
