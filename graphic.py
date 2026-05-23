@@ -173,6 +173,101 @@ def render(call, out_path):
     plt.close(fig); return out_path
 
 
+def _mini_zone(ax, x0, y0, w, h, call, rank):
+    """Draw one ranked mini-row: rank badge + small zone w/ ball + text, inside
+    the rectangle (x0,y0,w,h) in axes coords."""
+    # medal colors so the rank badge never reads as the (red) pitch dot
+    MEDALS = {1: ("#e8b923", "#7a5c00"),   # gold (fill, edge)
+              2: ("#c7ccd1", "#6b7178"),   # silver
+              3: ("#cd7f43", "#6e3d18")}   # bronze
+    badge_fill, badge_edge = MEDALS.get(rank, ("#c7ccd1", "#6b7178"))
+
+    top, bot = call["sz_top"], call["sz_bot"]
+    px, pz = call["pX"], call["pZ"]
+    mdir = str(call.get("miss_dir", "")).lower()
+    miss = float(call["miss_inches"])
+    hw = PLATE_HALF_WIDTH_FT
+
+    # rank badge (left) — medal colored
+    bxc, byc = x0 + 0.055, y0 + h/2
+    ax.add_patch(Circle((bxc, byc), 0.040, facecolor=badge_fill,
+                 edgecolor=badge_edge, linewidth=3, zorder=9,
+                 transform=ax.transAxes))
+    ax.text(bxc, byc, str(rank), transform=ax.transAxes, ha="center", va="center",
+            fontsize=18, fontweight="black", color="#1a1407", family=_font(), zorder=10)
+
+    # mini zone box (center-left)
+    ZX0 = x0 + 0.12; ZX1 = ZX0 + 0.14
+    zh = h * 0.62; ZY0 = byc - zh/2; ZY1 = byc + zh/2
+    zcx, zcy = (ZX0+ZX1)/2, (ZY0+ZY1)/2
+    zw_ft = 2*hw; zh_ft = max(0.1, top-bot)
+    s = min((ZX1-ZX0)/zw_ft, (ZY1-ZY0)/zh_ft)
+    fx = lambda v: zcx + v*s
+    fy = lambda v: zcy + (v-(top+bot)/2)*s
+    bx0, bx1, by0, by1 = fx(-hw), fx(hw), fy(bot), fy(top)
+    ax.add_patch(Rectangle((bx0, by0), bx1-bx0, by1-by0, facecolor="#ffffff",
+                 alpha=0.06, zorder=8, transform=ax.transAxes))
+    ax.add_patch(Rectangle((bx0, by0), bx1-bx0, by1-by0, fill=False,
+                 edgecolor=ZONE_LINE, linewidth=2, zorder=9, transform=ax.transAxes))
+    ball_r = (2.9/2/12)*s
+    dx, dy = fx(px), fy(pz)
+    # clamp within this row
+    dx = min(max(dx, x0+0.10), ZX1+0.05)
+    dy = min(max(dy, y0+0.02), y0+h-0.02)
+    ax.add_patch(Circle((dx, dy), ball_r*1.6, facecolor=ACCENT, alpha=0.2,
+                 zorder=9, transform=ax.transAxes))
+    ax.add_patch(Circle((dx, dy), ball_r, facecolor=ACCENT, edgecolor="#ffffff",
+                 linewidth=1.5, zorder=10, transform=ax.transAxes))
+
+    # text block (right)
+    tx = ZX1 + 0.08
+    ump = str(call.get("ump", "") or "").strip() or "Blue"
+    fam = _font()
+    ax.text(tx, byc + 0.045, f'{miss:.1f}" {("above" if "high" in mdir else "below" if "low" in mdir else "off")} the zone',
+            transform=ax.transAxes, ha="left", va="center", fontsize=13,
+            fontweight="black", color=ACCENT, family=fam, zorder=10)
+    ax.text(tx, byc - 0.008, ump, transform=ax.transAxes, ha="left", va="center",
+            fontsize=11.5, fontweight="black", color=INK, family=fam, zorder=10)
+    matchup = f'{call["pitcher"]} → {call["batter"]}'
+    ax.text(tx, byc - 0.055, matchup, transform=ax.transAxes, ha="left", va="center",
+            fontsize=9, fontweight="bold", color=DIM, family=fam, zorder=10)
+
+
+def render_top3(calls, out_path, date_range=""):
+    """Weekly card: up to 3 ranked mini-rows in the broadcast style."""
+    fam = _font()
+    fig, ax = plt.subplots(figsize=(6.4, 6.4), dpi=200)
+    fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
+
+    # top ribbon
+    ax.add_patch(Rectangle((0, 0.86), 1, 0.14, facecolor=ACCENT, zorder=2,
+                 transform=ax.transAxes))
+    t = ax.text(0.5, 0.935, "WORST CALLS OF THE WEEK", transform=ax.transAxes,
+                ha="center", va="center", fontsize=23, fontweight="black",
+                color="#ffffff", family=fam, zorder=3)
+    fig.canvas.draw()
+    r = t.get_window_extent().width / ax.get_window_extent().width
+    if r > 0.88:
+        t.set_fontsize(23 * 0.88 / r)
+    sub = date_range or "Overturned ABS challenges, ranked by miss"
+    ax.text(0.5, 0.883, sub, transform=ax.transAxes, ha="center", va="center",
+            fontsize=8.5, fontweight="black", color="#ffd2da", family=fam, zorder=3)
+
+    # three rows in the body (y from ~0.06 to ~0.82)
+    rows = [(0.58, 0.24), (0.32, 0.24), (0.06, 0.24)]  # (y0, height)
+    for i, (y0, h) in enumerate(rows):
+        if i < len(calls):
+            # faint row divider
+            if i > 0:
+                ax.plot([0.06, 0.94], [y0+h+0.005]*2, color="#2a313c", lw=1,
+                        zorder=2, transform=ax.transAxes)
+            _mini_zone(ax, 0.04, y0, 0.92, h, calls[i].__dict__ if hasattr(calls[i], "__dict__") else calls[i], i+1)
+
+    fig.savefig(out_path, facecolor=BG, bbox_inches="tight", pad_inches=0.0)
+    plt.close(fig); return out_path
+
+
 if __name__ == "__main__":
     render(dict(pitcher="Eury Pérez", batter="Bo Bichette", balls=3, strikes=1,
         inning=7, half="top", ump="Carlos Torres", miss_inches=4.9, miss_dir="high",
