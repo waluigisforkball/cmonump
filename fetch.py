@@ -55,6 +55,10 @@ class DunkCall:
     strikes: int
     inning: int
     half: str
+    away_team: str
+    home_team: str
+    away_score: int
+    home_score: int
     original_call: str       # e.g. "Called Strike"
     description: str         # MLB's ready-made sentence
     miss_inches: float
@@ -125,6 +129,10 @@ def _overturned_strikes_in_game(pk: int):
         return ""
     ump_name = _home_ump()
 
+    teams = feed.get("gameData", {}).get("teams", {})
+    away_abbr = teams.get("away", {}).get("abbreviation", "AWY")
+    home_abbr = teams.get("home", {}).get("abbreviation", "HOM")
+
     plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
     out = []
 
@@ -132,6 +140,10 @@ def _overturned_strikes_in_game(pk: int):
         matchup = play.get("matchup", {})
         about = play.get("about", {})
         result_desc = play.get("result", {}).get("description", "") or ""
+        # score after this play (Stats API standard fields); fall back to 0
+        _res = play.get("result", {})
+        a_score = int(_res.get("awayScore", 0) or 0)
+        h_score = int(_res.get("homeScore", 0) or 0)
 
         for ev in play.get("playEvents", []):
             if not ev.get("isPitch"):
@@ -181,6 +193,10 @@ def _overturned_strikes_in_game(pk: int):
                 strikes=int(cnt.get("strikes", 0)),
                 inning=int(about.get("inning", 0)),
                 half=str(about.get("halfInning", "")),
+                away_team=away_abbr,
+                home_team=home_abbr,
+                away_score=a_score,
+                home_score=h_score,
                 original_call="Called Strike",  # what the ump said before overturn
                 description=result_desc,
                 miss_inches=float(miss),
