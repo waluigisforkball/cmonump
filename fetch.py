@@ -57,6 +57,8 @@ class DunkCall:
     half: str
     away_team: str
     home_team: str
+    away_id: int
+    home_id: int
     away_score: int
     home_score: int
     original_call: str       # e.g. "Called Strike"
@@ -132,6 +134,8 @@ def _overturned_strikes_in_game(pk: int):
     teams = feed.get("gameData", {}).get("teams", {})
     away_abbr = teams.get("away", {}).get("abbreviation", "AWY")
     home_abbr = teams.get("home", {}).get("abbreviation", "HOM")
+    away_team_id = int(teams.get("away", {}).get("id", 0) or 0)
+    home_team_id = int(teams.get("home", {}).get("id", 0) or 0)
 
     plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
     out = []
@@ -195,6 +199,8 @@ def _overturned_strikes_in_game(pk: int):
                 half=str(about.get("halfInning", "")),
                 away_team=away_abbr,
                 home_team=home_abbr,
+                away_id=away_team_id,
+                home_id=home_team_id,
                 away_score=a_score,
                 home_score=h_score,
                 original_call="Called Strike",  # what the ump said before overturn
