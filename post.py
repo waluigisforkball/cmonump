@@ -23,7 +23,18 @@ def build_caption(call: dict, window: str) -> str:
     dir_word = {"high": "above", "low": "below", "wide": "off"}.get(
         mdir.split()[0] if mdir else "", "outside")
 
-    line1 = f"SMH Call {tag} \U0001F926"   # facepalm
+    # format the game date as e.g. "May 21" (falls back to raw string)
+    date_str = ""
+    gd = str(call.get("game_date", "")).strip()
+    if gd:
+        try:
+            import datetime as _dt
+            date_str = _dt.date.fromisoformat(gd[:10]).strftime("%b %-d")
+        except Exception:
+            date_str = gd
+
+    head = f"SMH Call {tag} \U0001F926"
+    line1 = f"{head} ({date_str})" if date_str else head
     line2 = (f'{call["pitcher"]} vs {call["batter"]}, '
              f'{call["balls"]}-{call["strikes"]} in the {half} of {inn}.')
     who = ump if ump else "Blue"
