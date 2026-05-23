@@ -9,7 +9,7 @@ Auth comes from env vars (set as GitHub Actions secrets):
 from __future__ import annotations
 import os
 import sys
-from atproto import Client, models
+from atproto import Client, client_utils
 
 
 def build_caption(call: dict, window: str) -> str:
@@ -73,13 +73,26 @@ def post_text_image(caption: str, image_path: str, alt_call: dict):
         img_bytes = f.read()
     alt = ("Weekly card ranking the three worst overturned ABS challenge calls, "
            "each shown as a strike-zone graphic with the miss distance.")
-    resp = client.send_image(text=caption, image=img_bytes, image_alt=alt)
+
+    # caption text already built (top-3 list + hashtags); append a clickable
+    # link to the #1 call's gamefeed if we have it.
+    link = alt_call.get("savant_link") if isinstance(alt_call, dict) else None
+    if link:
+        # strip the trailing hashtags off the caption, then rebuild with a link
+        base = caption.replace("\n\n#MLB #ABS", "").rstrip()
+        tb = (client_utils.TextBuilder()
+              .text(base + "\n\n")
+              .link("Watch #1 \u2192", link)
+              .text("\n#MLB #ABS"))
+        resp = client.send_image(text=tb, image=img_bytes, image_alt=alt)
+    else:
+        resp = client.send_image(text=caption, image=img_bytes, image_alt=alt)
     uri = getattr(resp, "uri", None)
     print(f"[post] posted: {uri}")
     return uri
 
 
-def post(call: dict, image_path: str, window: str) -> Optional[str]:  # noqa
+def post(call: dict, image_path: str, window: str):
     handle = os.environ.get("BLUESKY_HANDLE")
     app_pw = os.environ.get("BLUESKY_APP_PASSWORD")
     if not handle or not app_pw:
@@ -87,29 +100,46 @@ def post(call: dict, image_path: str, window: str) -> Optional[str]:  # noqa
               file=sys.stderr)
         return None
 
-    caption = build_caption(call, window)
-    if len(caption) > 300:
-        caption = caption[:297] + "..."
+    tag = "of the Week" if window == "week" else "of the Day"
+    miss = call["miss_inches"]
+    mdir = str(call.get("miss_dir", "")).lower()
+    half = "top" if "top" in str(call.get("half", "")).lower() else "bottom"
+    inn = call.get("inning", "")
+    ump = str(call.get("ump", "") or "").strip() or "Blue"
+    dir_word = {"high": "above", "low": "below", "wide": "off"}.get(
+        mdir.split()[0] if mdir else "", "outside")
+    date_str = ""
+    gd = str(call.get("game_date", "")).strip()
+    if gd:
+        try:
+            import datetime as _dt
+            date_str = _dt.date.fromisoformat(gd[:10]).strftime("%b %-d")
+        except Exception:
+            date_str = gd
+    head = f"SMH Call {tag} \U0001F926" + (f" ({date_str})" if date_str else "")
+
+    # rich text with a CLICKABLE link facet
+    tb = (client_utils.TextBuilder()
+          .text(f"{head}\n"
+                f'{call["pitcher"]} vs {call["batter"]}, '
+                f'{call["balls"]}-{call["strikes"]} in the {half} of {inn}.\n'
+                f'{ump} called this {miss:.1f}" {dir_word} the zone a strike. '
+                f"It was not.\n\n")
+          .link("Watch the play \u2192", call["savant_link"])
+          .text("\n#MLB #ABS"))
 
     client = Client()
     client.login(handle, app_pw)
-
     with open(image_path, "rb") as f:
         img_bytes = f.read()
-
     alt = (f'Strike zone graphic: pitch from {call["pitcher"]} to '
-           f'{call["batter"]} missed the zone by {call["miss_inches"]:.1f} '
-           f'inches but was originally called a strike, then overturned.')
-
-    # post with embedded image
-    resp = client.send_image(text=caption, image=img_bytes, image_alt=alt)
+           f'{call["batter"]} was {miss:.1f} inches {dir_word} the zone but '
+           f'was called a strike, then overturned on challenge.')
+    resp = client.send_image(text=tb, image=img_bytes, image_alt=alt)
     uri = getattr(resp, "uri", None)
     print(f"[post] posted: {uri}")
     return uri
 
-
-# typing import placed late to keep header clean
-from typing import Optional  # noqa: E402
 
 if __name__ == "__main__":
     print("This module is invoked by main.py. For a dry run, set env vars and "
