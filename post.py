@@ -15,14 +15,20 @@ from atproto import Client, models
 def build_caption(call: dict, window: str) -> str:
     tag = "of the Week" if window == "week" else "of the Day"
     miss = call["miss_inches"]
+    mdir = str(call.get("miss_dir", "")).lower()
     half = "top" if "top" in str(call.get("half", "")).lower() else "bottom"
     inn = call.get("inning", "")
+    ump = str(call.get("ump", "") or "").strip()
+
+    dir_word = {"high": "above", "low": "below", "wide": "off"}.get(
+        mdir.split()[0] if mdir else "", "outside")
+
     line1 = f"SMH Call {tag} \U0001F926"   # facepalm
-    line2 = (f'{call["pitcher"]} vs {call["batter"]} — '
-             f'{call["balls"]}-{call["strikes"]}, {half} {inn}.')
-    line3 = (f'The pitch missed by {miss:.1f}". '
-             f'Ump had to announce the overturn to the whole crowd.')
-    # keep under Bluesky's 300 grapheme limit
+    line2 = (f'{call["pitcher"]} vs {call["batter"]}, '
+             f'{call["balls"]}-{call["strikes"]} in the {half} of {inn}.')
+    who = f"{ump} called" if ump else "Called"
+    line3 = (f'{who} a strike that was {miss:.1f}" {dir_word} the zone. '
+             f'Challenged, overturned, announced to everybody.')
     return f"{line1}\n{line2}\n{line3}\n\n{call['savant_link']}\n#MLB #ABS"
 
 
