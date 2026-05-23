@@ -81,7 +81,7 @@ def render(call: dict, out_path: str) -> str:
     ump = str(call.get("ump", "") or "").strip()
 
     # ===== TITLE BAND =====
-    title = f"SMH, {ump.upper()}." if ump else "SMH, UMP."
+    title = f"SMH, {ump.upper()}." if ump else "SMH, BLUE."
     _fit_text(ax, 0.5, 0.945, title, fontsize=30, weight="black",
               color=ACCENT, fam=fam, max_frac=0.92)
     sub = f"Missed by {miss:.1f}\" - challenged, overturned, announced to everyone"
