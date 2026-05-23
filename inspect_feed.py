@@ -94,6 +94,26 @@ def main():
             print(list(pd.keys()))
             print("  coordinates:", list(pd.get("coordinates", {}).keys()))
 
+        # 1b) where do the umpires live?
+        print("\n=== OFFICIALS / UMPIRES ===")
+        live_offs = (feed.get("liveData", {}).get("boxscore", {})
+                     .get("officials", []))
+        if live_offs:
+            print("  liveData.boxscore.officials:")
+            for o in live_offs:
+                off = o.get("official", {})
+                print(f"    {o.get('officialType')}: {off.get('fullName')}")
+        else:
+            print("  (none at liveData.boxscore.officials)")
+        gd_offs = feed.get("gameData", {}).get("officials", [])
+        if gd_offs:
+            print("  gameData.officials:")
+            for o in gd_offs:
+                off = o.get("official", {})
+                print(f"    {o.get('officialType')}: {off.get('fullName')}")
+        else:
+            print("  (none at gameData.officials)")
+
         # 2) scan the WHOLE feed for challenge/review keywords
         print("\n=== KEYWORD HITS across feed ===")
         hits = list(_walk_find(feed))
