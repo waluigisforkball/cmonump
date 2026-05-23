@@ -50,6 +50,7 @@ class DunkCall:
     play_id: str
     pitcher: str
     batter: str
+    ump: str
     balls: int
     strikes: int
     inning: int
@@ -113,6 +114,17 @@ def _overturned_strikes_in_game(pk: int):
 
     game_date = (feed.get("gameData", {}).get("datetime", {})
                  .get("officialDate", ""))
+
+    # home plate umpire — check both known locations
+    def _home_ump():
+        for path in (feed.get("liveData", {}).get("boxscore", {}).get("officials", []),
+                     feed.get("gameData", {}).get("officials", [])):
+            for o in path or []:
+                if "home" in str(o.get("officialType", "")).lower():
+                    return o.get("official", {}).get("fullName", "")
+        return ""
+    ump_name = _home_ump()
+
     plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
     out = []
 
@@ -135,10 +147,15 @@ def _overturned_strikes_in_game(pk: int):
             if not rev.get("isOverturned"):
                 continue          # only overturns (the embarrassing ones)
 
-            call = details.get("call", {}).get("description", "") or \
-                details.get("description", "")
-            # "SMH ump" angle: on-field call was a STRIKE, overturned to ball
-            if "strike" not in call.lower():
+            call = details.get("call", {})
+            call_code = call.get("code", "")
+            call_desc = call.get("description", "")
+            # KEY INSIGHT: the feed shows the call AS CORRECTED (post-overturn).
+            # The "SMH ump" angle = ump originally said STRIKE, challenged,
+            # overturned to a BALL. So the CURRENT call is now a Ball ('B'/'*B').
+            # (The opposite — now 'Called Strike' + overturned — is a ball flipped
+            #  to a strike, i.e. the hitter getting rung up; not our angle.)
+            if not str(call_code).upper().lstrip("*").startswith("B"):
                 continue
 
             pdat = ev.get("pitchData", {})
@@ -159,11 +176,12 @@ def _overturned_strikes_in_game(pk: int):
                 play_id=str(ev.get("playId", "")),
                 pitcher=matchup.get("pitcher", {}).get("fullName", "Pitcher"),
                 batter=matchup.get("batter", {}).get("fullName", "Batter"),
+                ump=ump_name,
                 balls=int(cnt.get("balls", 0)),
                 strikes=int(cnt.get("strikes", 0)),
                 inning=int(about.get("inning", 0)),
                 half=str(about.get("halfInning", "")),
-                original_call=call or "Called Strike",
+                original_call="Called Strike",  # what the ump said before overturn
                 description=result_desc,
                 miss_inches=float(miss),
                 miss_dir=mdir,
