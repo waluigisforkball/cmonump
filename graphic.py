@@ -81,8 +81,8 @@ def render(call, out_path):
                 fontsize=27, fontweight="black", color="#ffffff", family=fam, zorder=3)
     fig.canvas.draw()
     r = t.get_window_extent().width/ax.get_window_extent().width
-    if r > 0.9:
-        t.set_fontsize(27*0.9/r)
+    if r > 0.82:
+        t.set_fontsize(27*0.82/r)
     ax.text(0.5, 0.885, "OVERTURNED ABS CHALLENGE", transform=ax.transAxes,
             ha="center", va="center", fontsize=8.5, fontweight="black",
             color="#ffd2da", family=fam, zorder=3)
@@ -109,9 +109,9 @@ def render(call, out_path):
     fill_r = _honest_fill_r(ball_r, 2)   # fill pulled in so stroke sits inside
     dx, dy = fx(px), fy(pz)
     m = ball_r+0.02; dx = min(max(dx, m), 1-m); dy = min(max(dy, 0.30), 0.78)
-    # glow + ball (glow keyed to TRUE radius; fill inset so the white outline's
-    # OUTER edge equals the true 2.9" edge — honest gap to the zone)
-    ax.add_patch(Circle((dx, dy), ball_r*1.7, facecolor=ACCENT, alpha=0.22, zorder=4))
+    # ball only, no glow: the white outline's OUTER edge equals the true 2.9"
+    # edge, so nothing extends past the real ball — the visual gap to the zone
+    # is the honest gap.
     ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
                  linewidth=2, zorder=5))
     if "high" in mdir or "low" in mdir:
@@ -227,8 +227,6 @@ def _mini_zone(ax, x0, y0, w, h, call, rank):
     # clamp within this row
     dx = min(max(dx, x0+0.10), ZX1+0.05)
     dy = min(max(dy, y0+0.02), y0+h-0.02)
-    ax.add_patch(Circle((dx, dy), ball_r*1.6, facecolor=ACCENT, alpha=0.2,
-                 zorder=9, transform=ax.transAxes))
     ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
                  linewidth=1.5, zorder=10, transform=ax.transAxes))
 
