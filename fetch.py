@@ -18,6 +18,10 @@ Confirmed structure (from feed inspection, 2026):
 
 "SMH ump" angle = a CALLED STRIKE overturned to a ball (hitter robbed),
 ranked by how far the pitch missed the nearest zone edge, in inches.
+
+Ranking: miss distance is the headline and the primary sort. A leverage score
+(LI-style approximation, NOT real Leverage Index) is used ONLY to break exact
+ties on miss distance — the literal worst miss always wins.
 """
 
 from __future__ import annotations
@@ -70,6 +74,7 @@ class DunkCall:
     sz_top: float
     sz_bot: float
     savant_link: str
+    leverage: float = 0.0    # LI-style tiebreaker only; see _compute_leverage
 
     def headline_miss(self) -> str:
         return f'{self.miss_inches:.1f}"'
@@ -95,6 +100,38 @@ def _miss_distance_inches(pX, pZ, top, bot):
     if h_miss >= v_miss:
         return h_miss, (h_dir or "off the plate")
     return v_miss, (v_dir or "off the zone")
+
+
+def _compute_leverage(balls, strikes, inning, away_score, home_score):
+    """LI-style approximation (NOT real Leverage Index). A single float used
+    ONLY to break exact ties on miss distance. Three factors multiplied so
+    they compound: count drama x game closeness x inning weight.
+
+    NOTE: the feed's per-pitch count is the post-pitch count and isn't fully
+    trustworthy, so we clamp defensively and only treat 'two strikes' as the
+    high-drama case (robbed of a punchout). We never trust a literal 3 strikes.
+    """
+    s = max(0, min(2, int(strikes)))      # clamp; ignore impossible values
+    b = max(0, min(3, int(balls)))
+
+    # count drama: 2 strikes = robbed of a K (highest); full count tops it.
+    if s == 2 and b == 3:
+        count_factor = 3.0                # full count, punchout on the line
+    elif s == 2:
+        count_factor = 2.5                # two strikes, punchout on the line
+    elif b == 3:
+        count_factor = 1.3                # 3-ball: walk was likely anyway
+    else:
+        count_factor = 1.0
+
+    # game closeness: tie/1-run = max, decaying as the lead grows.
+    diff = abs(int(away_score) - int(home_score))
+    close_factor = 1.0 / (1.0 + 0.45 * diff)   # 1.00 tie, ~0.69 by 1, ~0.20 by 8
+
+    # inning weight: later = heavier. Caps so extras don't run away.
+    inning_factor = 1.0 + 0.12 * max(0, min(int(inning), 12) - 1)
+
+    return round(count_factor * close_factor * inning_factor, 4)
 
 
 def _savant_link(pk: int) -> str:
@@ -210,13 +247,20 @@ def _overturned_strikes_in_game(pk: int):
                 pX=float(pX), pZ=float(pZ),
                 sz_top=float(top), sz_bot=float(bot),
                 savant_link=_savant_link(pk),
+                leverage=_compute_leverage(
+                    int(cnt.get("balls", 0)), int(cnt.get("strikes", 0)),
+                    int(about.get("inning", 0)), a_score, h_score),
             ))
     return out
 
 
 def fetch_window(start: str, end: str, inspect: bool = False):
     """start/end inclusive YYYY-MM-DD. Returns the single worst overturned called
-    strike across all games in the window, or None."""
+    strike across all games in the window, or None.
+
+    Sort key is (miss_inches, leverage): miss distance is compared at full float
+    precision, so leverage only ever decides genuine ties — a pure tiebreaker.
+    """
     d0 = dt.date.fromisoformat(start)
     d1 = dt.date.fromisoformat(end)
     all_calls = []
@@ -230,8 +274,10 @@ def fetch_window(start: str, end: str, inspect: bool = False):
 
     if inspect:
         print(f"=== {len(all_calls)} overturned called-strikes in window ===")
-        for c in sorted(all_calls, key=lambda x: x.miss_inches, reverse=True)[:10]:
-            print(f'  {c.miss_inches:5.1f}"  {c.pitcher} -> {c.batter}  '
+        for c in sorted(all_calls, key=lambda x: (x.miss_inches, x.leverage),
+                        reverse=True)[:10]:
+            print(f'  {c.miss_inches:5.1f}"  lev={c.leverage:5.2f}  '
+                  f"{c.pitcher} -> {c.batter}  "
                   f"({c.balls}-{c.strikes}, {c.half} {c.inning})  "
                   f"{c.description[:80]}")
         return None
@@ -241,12 +287,13 @@ def fetch_window(start: str, end: str, inspect: bool = False):
               file=sys.stderr)
         return None
 
-    return max(all_calls, key=lambda c: c.miss_inches)
+    return max(all_calls, key=lambda c: (c.miss_inches, c.leverage))
 
 
 def fetch_window_top_n(start: str, end: str, n: int = 3):
     """Return the top-n worst overturned called strikes in the window, ranked
-    by miss distance (descending). Fewer than n if the week was thin."""
+    by miss distance (descending), leverage breaking exact ties. Fewer than n
+    if the week was thin."""
     d0 = dt.date.fromisoformat(start)
     d1 = dt.date.fromisoformat(end)
     all_calls = []
@@ -261,7 +308,8 @@ def fetch_window_top_n(start: str, end: str, n: int = 3):
         print(f"[fetch] no overturned called-strikes in {start}..{end}",
               file=sys.stderr)
         return []
-    return sorted(all_calls, key=lambda c: c.miss_inches, reverse=True)[:n]
+    return sorted(all_calls, key=lambda c: (c.miss_inches, c.leverage),
+                  reverse=True)[:n]
 
 
 def main():
