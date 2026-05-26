@@ -54,6 +54,16 @@ def _font():
 PLATE_HALF_WIDTH_FT = (17.0/2.0)/12.0; FT_TO_IN = 12.0
 
 
+# Card is 6.4" square mapped to axes 0..1, so 1 point = (1/72)/6.4 axes units.
+# A stroke is centered on the radius, so HALF its width spills outside the
+# true ball edge. Pull the fill radius in by that half-width so the OUTER edge
+# of the white outline lands exactly on the real 2.9" ball edge — keeping the
+# gap to the zone honest (never undercutting the miss).
+def _honest_fill_r(true_r, linewidth_pt):
+    half = (linewidth_pt / 2.0) / 72.0 / 6.4
+    return max(true_r - half, true_r * 0.55)   # floor so tiny balls still render
+
+
 def render(call, out_path):
     fam = _font()
     fig, ax = plt.subplots(figsize=(6.4, 6.4), dpi=200)
@@ -95,12 +105,14 @@ def render(call, out_path):
         ax.plot([bx0+(bx1-bx0)*f]*2, [by0, by1], color=ZONE_LINE, lw=0.7, alpha=0.35, zorder=3)
         ax.plot([bx0, bx1], [by0+(by1-by0)*f]*2, color=ZONE_LINE, lw=0.7, alpha=0.35, zorder=3)
 
-    ball_r = (2.9/2/12)*s
+    ball_r = (2.9/2/12)*s            # TRUE ball radius = outer edge of the dot
+    fill_r = _honest_fill_r(ball_r, 2)   # fill pulled in so stroke sits inside
     dx, dy = fx(px), fy(pz)
     m = ball_r+0.02; dx = min(max(dx, m), 1-m); dy = min(max(dy, 0.30), 0.78)
-    # glow + ball
+    # glow + ball (glow keyed to TRUE radius; fill inset so the white outline's
+    # OUTER edge equals the true 2.9" edge — honest gap to the zone)
     ax.add_patch(Circle((dx, dy), ball_r*1.7, facecolor=ACCENT, alpha=0.22, zorder=4))
-    ax.add_patch(Circle((dx, dy), ball_r, facecolor=ACCENT, edgecolor="#ffffff",
+    ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
                  linewidth=2, zorder=5))
     if "high" in mdir or "low" in mdir:
         edge_y = by1 if "high" in mdir else by0; ex = min(max(dx, bx0), bx1)
@@ -209,14 +221,15 @@ def _mini_zone(ax, x0, y0, w, h, call, rank):
                  alpha=0.06, zorder=8, transform=ax.transAxes))
     ax.add_patch(Rectangle((bx0, by0), bx1-bx0, by1-by0, fill=False,
                  edgecolor=ZONE_LINE, linewidth=2, zorder=9, transform=ax.transAxes))
-    ball_r = (2.9/2/12)*s
+    ball_r = (2.9/2/12)*s            # TRUE ball radius
+    fill_r = _honest_fill_r(ball_r, 1.5)
     dx, dy = fx(px), fy(pz)
     # clamp within this row
     dx = min(max(dx, x0+0.10), ZX1+0.05)
     dy = min(max(dy, y0+0.02), y0+h-0.02)
     ax.add_patch(Circle((dx, dy), ball_r*1.6, facecolor=ACCENT, alpha=0.2,
                  zorder=9, transform=ax.transAxes))
-    ax.add_patch(Circle((dx, dy), ball_r, facecolor=ACCENT, edgecolor="#ffffff",
+    ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
                  linewidth=1.5, zorder=10, transform=ax.transAxes))
 
     # text block (right)
