@@ -43,6 +43,36 @@ def build_caption(call: dict, window: str) -> str:
     return f"{line1}\n{line2}\n{line3}\n\n{call['savant_link']}\n#MLB #ABS"
 
 
+def build_caption_pitcher(call: dict) -> str:
+    """Robbed-pitcher caption (voice C, tight deadpan). The pitch was IN the
+    zone, called a ball, overturned to a strike. Header stays 'SMH Call of the
+    Day' for brand unity; line 2 immediately signals this is the pitcher
+    direction so it never reads as a dupe of the flagship."""
+    center = float(call.get("center_inches", 0.0))
+    half = "top" if "top" in str(call.get("half", "")).lower() else "bottom"
+    inn = call.get("inning", "")
+    ump = str(call.get("ump", "") or "").strip() or "Blue"
+
+    date_str = ""
+    gd = str(call.get("game_date", "")).strip()
+    if gd:
+        try:
+            import datetime as _dt
+            date_str = _dt.date.fromisoformat(gd[:10]).strftime("%b %-d")
+        except Exception:
+            date_str = gd
+
+    head = "SMH Call of the Day \U0001F926"
+    line1 = f"{head} ({date_str})" if date_str else head
+    # line 2 flips the framing: pitcher robbed
+    line2 = (f'{call["pitcher"]} got robbed vs {call["batter"]}, '
+             f'{call["balls"]}-{call["strikes"]} in the {half} of {inn}.')
+    # voice C: claim, then flat verdict — mirrors "It was not."
+    line3 = (f'{center:.1f}" from dead center. {ump} called it a ball. '
+             f'It was a strike.')
+    return f"{line1}\n{line2}\n{line3}\n\n{call['savant_link']}\n#MLB #ABS"
+
+
 def build_caption_weekly(calls: list, date_range: str = "") -> str:
     """Caption for the weekly top-3 card."""
     head = "\U0001F926 Worst Calls of the Week"
@@ -78,8 +108,22 @@ def post_text_image(caption: str, image_path: str, alt_call: dict):
     # link to the #1 call's gamefeed if we have it.
     link = alt_call.get("savant_link") if isinstance(alt_call, dict) else None
     if link:
-        # strip the trailing hashtags off the caption, then rebuild with a link
-        base = caption.replace("\n\n#MLB #ABS", "").rstrip()
+        # Strip the trailing hashtags off, then rebuild with a link facet.
+        # BUGFIX: build_caption_weekly truncates long captions with "..." which
+        # can chop the "\n\n#MLB #ABS" tail, so a literal .replace() would miss
+        # and leave hashtags stranded mid-caption. Use rsplit on the tag instead
+        # so we always cleanly separate body from tail regardless of truncation.
+        tail = "\n\n#MLB #ABS"
+        if tail in caption:
+            base = caption.rsplit(tail, 1)[0].rstrip()
+        else:
+            # caption was truncated; drop any trailing "...", strip a dangling
+            # "#MLB"/"#ABS" fragment if present, and use what remains as body.
+            base = caption.rstrip(". ").rstrip()
+            for frag in ("#MLB #ABS", "#MLB", "#ABS"):
+                if base.endswith(frag):
+                    base = base[: -len(frag)].rstrip()
+                    break
         tb = (client_utils.TextBuilder()
               .text(base + "\n\n")
               .link("Watch #1 \u2192", link)
@@ -135,6 +179,52 @@ def post(call: dict, image_path: str, window: str):
     alt = (f'Strike zone graphic: pitch from {call["pitcher"]} to '
            f'{call["batter"]} was {miss:.1f} inches {dir_word} the zone but '
            f'was called a strike, then overturned on challenge.')
+    resp = client.send_image(text=tb, image=img_bytes, image_alt=alt)
+    uri = getattr(resp, "uri", None)
+    print(f"[post] posted: {uri}")
+    return uri
+
+
+def post_pitcher(call: dict, image_path: str):
+    """Post the robbed-pitcher card (ball -> overturned to strike). Voice C,
+    clickable gamefeed link facet, mirrors post() structurally."""
+    handle = os.environ.get("BLUESKY_HANDLE")
+    app_pw = os.environ.get("BLUESKY_APP_PASSWORD")
+    if not handle or not app_pw:
+        print("[post] Missing BLUESKY_HANDLE / BLUESKY_APP_PASSWORD env vars.",
+              file=sys.stderr)
+        return None
+
+    center = float(call.get("center_inches", 0.0))
+    half = "top" if "top" in str(call.get("half", "")).lower() else "bottom"
+    inn = call.get("inning", "")
+    ump = str(call.get("ump", "") or "").strip() or "Blue"
+    date_str = ""
+    gd = str(call.get("game_date", "")).strip()
+    if gd:
+        try:
+            import datetime as _dt
+            date_str = _dt.date.fromisoformat(gd[:10]).strftime("%b %-d")
+        except Exception:
+            date_str = gd
+    head = "SMH Call of the Day \U0001F926" + (f" ({date_str})" if date_str else "")
+
+    tb = (client_utils.TextBuilder()
+          .text(f"{head}\n"
+                f'{call["pitcher"]} got robbed vs {call["batter"]}, '
+                f'{call["balls"]}-{call["strikes"]} in the {half} of {inn}.\n'
+                f'{center:.1f}" from dead center. {ump} called it a ball. '
+                f"It was a strike.\n\n")
+          .link("Watch the play \u2192", call["savant_link"])
+          .text("\n#MLB #ABS"))
+
+    client = Client()
+    client.login(handle, app_pw)
+    with open(image_path, "rb") as f:
+        img_bytes = f.read()
+    alt = (f'Strike zone graphic: pitch from {call["pitcher"]} to '
+           f'{call["batter"]} was {center:.1f} inches from the center of the '
+           f'zone but was called a ball, then overturned to a strike on challenge.')
     resp = client.send_image(text=tb, image=img_bytes, image_alt=alt)
     uri = getattr(resp, "uri", None)
     print(f"[post] posted: {uri}")
