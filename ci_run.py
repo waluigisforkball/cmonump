@@ -41,21 +41,39 @@ def main():
         window = "week" if cron.strip() == "0 15 * * 1" else "day"
         date = None
         inspect = False
+        pitcher_inspect = False
         dry_run = False
     else:
         window = os.environ.get("IN_WINDOW") or "day"
         date = os.environ.get("IN_DATE") or None
         inspect = _truthy(os.environ.get("IN_INSPECT"))
+        pitcher_inspect = _truthy(os.environ.get("IN_PITCHERINSPECT"))
         dry_run = _truthy(os.environ.get("IN_DRY_RUN"))
 
     print(f"[ci] event={event} window={window} date={date} "
-          f"inspect={inspect} dry_run={dry_run}")
+          f"inspect={inspect} pitcher_inspect={pitcher_inspect} dry_run={dry_run}")
 
+    # flagship (hitter) inspect — prints the worst overturned called-strikes
     if inspect:
         anchor = (dt.date.fromisoformat(date) if date
                   else dt.date.today() - dt.timedelta(days=1))
-        fetch_mod.fetch_window(anchor.isoformat(), anchor.isoformat(),
-                               inspect=True)
+        if window == "week":
+            start = (anchor - dt.timedelta(days=6)).isoformat()
+        else:
+            start = anchor.isoformat()
+        fetch_mod.fetch_window(start, anchor.isoformat(), inspect=True)
+        return 0
+
+    # robbed-pitcher inspect — prints every in-zone ball->strike overturn with
+    # its center distance and whether it clears the egregious gate.
+    if pitcher_inspect:
+        anchor = (dt.date.fromisoformat(date) if date
+                  else dt.date.today() - dt.timedelta(days=1))
+        if window == "week":
+            start = (anchor - dt.timedelta(days=6)).isoformat()
+        else:
+            start = anchor.isoformat()
+        fetch_mod.fetch_window_pitcher(start, anchor.isoformat(), inspect=True)
         return 0
 
     return main_mod.run(window, date, dry_run)
