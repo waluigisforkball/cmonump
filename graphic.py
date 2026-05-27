@@ -64,13 +64,18 @@ def _honest_fill_r(true_r, linewidth_pt):
     return max(true_r - half, true_r * 0.55)   # floor so tiny balls still render
 
 
-def render(call, out_path):
+def render(call, out_path, pitcher=False):
+    """Daily broadcast card. pitcher=False is the flagship (pitch outside the
+    zone, called a strike, now a ball). pitcher=True is the robbed-pitcher
+    variant (pitch INSIDE the zone, called a ball, now a strike): the dot sits
+    inside the box, the label is distance-from-center, and the verdict flips."""
     fam = _font()
     fig, ax = plt.subplots(figsize=(6.4, 6.4), dpi=200)
     fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
 
     miss = float(call["miss_inches"]); mdir = str(call.get("miss_dir", "")).lower()
+    center_in = float(call.get("center_inches", 0.0))  # used only when pitcher
     ump = str(call.get("ump", "") or "").strip()
 
     # ---- TOP RIBBON (accent) ----
@@ -83,7 +88,9 @@ def render(call, out_path):
     r = t.get_window_extent().width/ax.get_window_extent().width
     if r > 0.82:
         t.set_fontsize(27*0.82/r)
-    ax.text(0.5, 0.885, "OVERTURNED ABS CHALLENGE", transform=ax.transAxes,
+    subtitle = ("OVERTURNED ABS CHALLENGE" if not pitcher
+                else "OVERTURNED ABS CHALLENGE")
+    ax.text(0.5, 0.885, subtitle, transform=ax.transAxes,
             ha="center", va="center", fontsize=8.5, fontweight="black",
             color="#ffd2da", family=fam, zorder=3)
 
@@ -108,32 +115,55 @@ def render(call, out_path):
     ball_r = (2.9/2/12)*s            # TRUE ball radius = outer edge of the dot
     fill_r = _honest_fill_r(ball_r, 2)   # fill pulled in so stroke sits inside
     dx, dy = fx(px), fy(pz)
-    m = ball_r+0.02; dx = min(max(dx, m), 1-m); dy = min(max(dy, 0.30), 0.78)
-    # ball only, no glow: the white outline's OUTER edge equals the true 2.9"
-    # edge, so nothing extends past the real ball — the visual gap to the zone
-    # is the honest gap.
-    ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
-                 linewidth=2, zorder=5))
-    if "high" in mdir or "low" in mdir:
-        edge_y = by1 if "high" in mdir else by0; ex = min(max(dx, bx0), bx1)
-        g = ball_r+0.012; stop = dy-g if dy > edge_y else dy+g
-        if abs(stop-edge_y) > 0.01:
-            ax.annotate("", xy=(ex, stop), xytext=(ex, edge_y),
-                arrowprops=dict(arrowstyle="-", linestyle=(0,(3,2)), color=ACCENT, lw=2), zorder=4)
-        ax.text(dx+ball_r+0.03, dy, f'{miss:.1f}"', ha="left", va="center",
-                fontsize=13, fontweight="black", color="#ffffff", family=fam, zorder=6)
-    else:
-        edge_x = bx1 if dx > zcx else bx0; g = ball_r+0.012
-        stop = dx-g if dx > edge_x else dx+g
-        if abs(stop-edge_x) > 0.01:
-            ax.annotate("", xy=(stop, dy), xytext=(edge_x, dy),
-                arrowprops=dict(arrowstyle="-", linestyle=(0,(3,2)), color=ACCENT, lw=2), zorder=4)
-        ax.text(dx, dy+ball_r+0.03, f'{miss:.1f}"', ha="center", va="bottom",
-                fontsize=13, fontweight="black", color="#ffffff", family=fam, zorder=6)
 
-    # "BALL" tag near the zone to underline the verdict
-    ax.text(zcx, by0-0.05, "RULED A BALL", ha="center", va="top", fontsize=9,
-            fontweight="black", color=GREEN, family=fam, zorder=6)
+    if not pitcher:
+        # FLAGSHIP: pitch is outside the zone. Clamp into frame, draw the dot,
+        # then a dashed leader line from the nearest zone edge to the ball.
+        m = ball_r+0.02; dx = min(max(dx, m), 1-m); dy = min(max(dy, 0.30), 0.78)
+        ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
+                     linewidth=2, zorder=5))
+        if "high" in mdir or "low" in mdir:
+            edge_y = by1 if "high" in mdir else by0; ex = min(max(dx, bx0), bx1)
+            g = ball_r+0.012; stop = dy-g if dy > edge_y else dy+g
+            if abs(stop-edge_y) > 0.01:
+                ax.annotate("", xy=(ex, stop), xytext=(ex, edge_y),
+                    arrowprops=dict(arrowstyle="-", linestyle=(0,(3,2)), color=ACCENT, lw=2), zorder=4)
+            ax.text(dx+ball_r+0.03, dy, f'{miss:.1f}"', ha="left", va="center",
+                    fontsize=13, fontweight="black", color="#ffffff", family=fam, zorder=6)
+        else:
+            edge_x = bx1 if dx > zcx else bx0; g = ball_r+0.012
+            stop = dx-g if dx > edge_x else dx+g
+            if abs(stop-edge_x) > 0.01:
+                ax.annotate("", xy=(stop, dy), xytext=(edge_x, dy),
+                    arrowprops=dict(arrowstyle="-", linestyle=(0,(3,2)), color=ACCENT, lw=2), zorder=4)
+            ax.text(dx, dy+ball_r+0.03, f'{miss:.1f}"', ha="center", va="bottom",
+                    fontsize=13, fontweight="black", color="#ffffff", family=fam, zorder=6)
+        # verdict
+        ax.text(zcx, by0-0.05, "OVERTURNED \u2192 BALL", ha="center", va="top",
+                fontsize=9, fontweight="black", color=GREEN, family=fam, zorder=6)
+    else:
+        # ROBBED PITCHER: pitch is INSIDE the zone (in_zone enforced upstream).
+        # Draw the dot at its true spot — no clamping that would shove it out of
+        # the box — with a dashed leader line to dead-center and a center-distance
+        # label. The dot sitting inside the box IS the argument.
+        ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
+                     linewidth=2, zorder=5))
+        # dashed line from zone center to the ball edge
+        g = ball_r+0.012
+        ddx, ddy = dx-zcx, dy-zcy
+        dist = (ddx**2 + ddy**2) ** 0.5
+        if dist > g:
+            ux, uy = ddx/dist, ddy/dist
+            ax.annotate("", xy=(dx-ux*g, dy-uy*g), xytext=(zcx, zcy),
+                arrowprops=dict(arrowstyle="-", linestyle=(0,(3,2)), color=ACCENT, lw=2), zorder=4)
+        # label offset outward from center so it never sits under the dot
+        lx = dx + (ball_r+0.03 if dx >= zcx else -(ball_r+0.03))
+        ha = "left" if dx >= zcx else "right"
+        ax.text(lx, dy, f'{center_in:.1f}"', ha=ha, va="center",
+                fontsize=13, fontweight="black", color="#ffffff", family=fam, zorder=6)
+        # verdict
+        ax.text(zcx, by0-0.05, "OVERTURNED \u2192 STRIKE", ha="center", va="top",
+                fontsize=9, fontweight="black", color=GREEN, family=fam, zorder=6)
 
     # ---- BOTTOM RIBBON (panel) ----
     ax.add_patch(Rectangle((0, 0), 1, 0.20, facecolor=PANEL, zorder=7,
