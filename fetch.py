@@ -75,6 +75,12 @@ class DunkCall:
     sz_bot: float
     savant_link: str
     leverage: float = 0.0    # LI-style tiebreaker only; see _compute_leverage
+    # --- robbed-pitcher track (ball -> overturned to STRIKE). Defaults keep the
+    # existing hitter path untouched; these are only populated/used by the
+    # pitcher functions below. ---
+    direction: str = "hitter"     # "hitter" (now a ball) or "pitcher" (now a strike)
+    center_inches: float = 0.0    # distance from dead-center of zone (pitcher rank)
+    in_zone: bool = True          # was the pitch actually inside the rulebook zone
 
     def headline_miss(self) -> str:
         return f'{self.miss_inches:.1f}"'
@@ -100,6 +106,25 @@ def _miss_distance_inches(pX, pZ, top, bot):
     if h_miss >= v_miss:
         return h_miss, (h_dir or "off the plate")
     return v_miss, (v_dir or "off the zone")
+
+
+def _center_distance_inches(pX, pZ, top, bot):
+    """Straight-line distance (inches) from the pitch to dead-center of the zone.
+    Center is pX=0 horizontally, (top+bot)/2 vertically. SMALLER = more middle-
+    middle = more embarrassing if it was called a ball (robbed-pitcher rank)."""
+    import math
+    cz = (top + bot) / 2.0
+    dx_in = (pX - 0.0) * FT_TO_IN
+    dz_in = (pZ - cz) * FT_TO_IN
+    return math.hypot(dx_in, dz_in)
+
+
+def _inside_zone(pX, pZ, top, bot):
+    """Was the pitch inside the rulebook zone? Robbed-pitcher cards only use
+    IN-ZONE calls so the dot always sits inside the box (caption never fights
+    the picture)."""
+    hw = PLATE_HALF_WIDTH_FT
+    return (-hw <= pX <= hw) and (bot <= pZ <= top)
 
 
 def _compute_leverage(balls, strikes, inning, away_score, home_score):
@@ -147,8 +172,17 @@ def _game_pks(date: str):
     return pks
 
 
-def _overturned_strikes_in_game(pk: int):
-    """All 'called strike -> overturned to ball' ABS challenges in a game."""
+def _overturned_calls_in_game(pk: int):
+    """All overturned ABS challenges in a game, BOTH directions, tagged.
+
+    One feed-walk captures everything (so a day running both the hitter and
+    pitcher paths only fetches each feed once). Each returned DunkCall is tagged
+    with .direction:
+      "hitter"  = now a Ball  (ump said strike, overturned to ball) — flagship
+      "pitcher" = now a Strike (ump said ball, overturned to strike) — egregious-only
+    Hitter calls carry miss_inches (distance outside the zone); pitcher calls
+    carry center_inches (distance from dead-center) and in_zone.
+    """
     try:
         feed = _get(FEED.format(pk=pk))
     except Exception as e:
@@ -181,7 +215,6 @@ def _overturned_strikes_in_game(pk: int):
         matchup = play.get("matchup", {})
         about = play.get("about", {})
         result_desc = play.get("result", {}).get("description", "") or ""
-        # score after this play (Stats API standard fields); fall back to 0
         _res = play.get("result", {})
         a_score = int(_res.get("awayScore", 0) or 0)
         h_score = int(_res.get("homeScore", 0) or 0)
@@ -201,14 +234,17 @@ def _overturned_strikes_in_game(pk: int):
                 continue          # only overturns (the embarrassing ones)
 
             call = details.get("call", {})
-            call_code = call.get("code", "")
-            call_desc = call.get("description", "")
-            # KEY INSIGHT: the feed shows the call AS CORRECTED (post-overturn).
-            # The "SMH ump" angle = ump originally said STRIKE, challenged,
-            # overturned to a BALL. So the CURRENT call is now a Ball ('B'/'*B').
-            # (The opposite — now 'Called Strike' + overturned — is a ball flipped
-            #  to a strike, i.e. the hitter getting rung up; not our angle.)
-            if not str(call_code).upper().lstrip("*").startswith("B"):
+            call_code = str(call.get("code", "")).upper().lstrip("*")
+            # The feed shows the call AS CORRECTED (post-overturn):
+            #   now a Ball  ('B...') -> ump said STRIKE, hitter robbed  (hitter)
+            #   now a Strike('C...') -> ump said BALL,  pitcher robbed  (pitcher)
+            # 'S' is a swinging strike (not a take) so we only treat 'C' as the
+            # pitcher direction.
+            if call_code.startswith("B"):
+                direction = "hitter"
+            elif call_code.startswith("C"):
+                direction = "pitcher"
+            else:
                 continue
 
             pdat = ev.get("pitchData", {})
@@ -221,6 +257,8 @@ def _overturned_strikes_in_game(pk: int):
                 continue
 
             miss, mdir = _miss_distance_inches(pX, pZ, top, bot)
+            cdist = _center_distance_inches(pX, pZ, top, bot)
+            inzone = _inside_zone(pX, pZ, top, bot)
             cnt = ev.get("count", {})
 
             out.append(DunkCall(
@@ -240,7 +278,8 @@ def _overturned_strikes_in_game(pk: int):
                 home_id=home_team_id,
                 away_score=a_score,
                 home_score=h_score,
-                original_call="Called Strike",  # what the ump said before overturn
+                original_call=("Called Strike" if direction == "hitter"
+                               else "Ball"),  # what the ump said before overturn
                 description=result_desc,
                 miss_inches=float(miss),
                 miss_dir=mdir,
@@ -250,8 +289,17 @@ def _overturned_strikes_in_game(pk: int):
                 leverage=_compute_leverage(
                     int(cnt.get("balls", 0)), int(cnt.get("strikes", 0)),
                     int(about.get("inning", 0)), a_score, h_score),
+                direction=direction,
+                center_inches=float(cdist),
+                in_zone=bool(inzone),
             ))
     return out
+
+
+def _overturned_strikes_in_game(pk: int):
+    """Back-compat: hitter-direction calls only (now-a-ball). Used by the
+    existing flagship daily/weekly paths."""
+    return [c for c in _overturned_calls_in_game(pk) if c.direction == "hitter"]
 
 
 def fetch_window(start: str, end: str, inspect: bool = False):
@@ -312,9 +360,63 @@ def fetch_window_top_n(start: str, end: str, n: int = 3):
                   reverse=True)[:n]
 
 
+# Robbed-pitcher gate: a pitch this close (inches) to dead-center of the zone
+# that was called a BALL and overturned to a STRIKE is "egregious" enough to
+# post. Calibrated from a full-season scan: ~8 calls/season clear 6". Tunable.
+PITCHER_GATE_INCHES = 6.0
+
+
+def fetch_window_pitcher(start: str, end: str, gate: float = PITCHER_GATE_INCHES,
+                         inspect: bool = False):
+    """Robbed-pitcher path. Returns the single most egregious 'ball -> overturned
+    to strike' call in the window that (a) was IN the rulebook zone and (b) sat
+    within `gate` inches of dead-center — or None if nothing qualifies.
+
+    Ranked by center distance ASCENDING (closer to middle = worse), leverage
+    breaking exact ties.
+    """
+    d0 = dt.date.fromisoformat(start)
+    d1 = dt.date.fromisoformat(end)
+    all_calls = []
+    day = d0
+    while day <= d1:
+        pks = _game_pks(day.isoformat())
+        print(f"[fetch] (pitcher) {day} -> {len(pks)} games", file=sys.stderr)
+        for pk in pks:
+            for c in _overturned_calls_in_game(pk):
+                if c.direction == "pitcher" and c.in_zone:
+                    all_calls.append(c)
+        day += dt.timedelta(days=1)
+
+    # apply the egregious gate
+    qualified = [c for c in all_calls if c.center_inches <= gate]
+
+    if inspect:
+        print(f"=== {len(all_calls)} in-zone ball->strike overturns; "
+              f"{len(qualified)} within {gate:.1f}\" gate ===")
+        for c in sorted(all_calls, key=lambda x: (x.center_inches, -x.leverage))[:15]:
+            flag = "POST" if c.center_inches <= gate else "skip"
+            print(f'  {c.center_inches:5.2f}" from center  [{flag}]  '
+                  f"lev={c.leverage:4.2f}  {c.pitcher} -> {c.batter}  "
+                  f"({c.half} {c.inning})  {c.game_date}")
+        return None
+
+    if not qualified:
+        print(f"[fetch] no egregious robbed-pitcher call (<= {gate}\") "
+              f"in {start}..{end}", file=sys.stderr)
+        return None
+
+    # closest to center wins; leverage breaks exact ties (note: ascending on
+    # center distance, so we min() and use -leverage to keep "higher lev wins").
+    return min(qualified, key=lambda c: (c.center_inches, -c.leverage))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--window", choices=["day", "week"], default="day")
+    ap.add_argument("--direction", choices=["hitter", "pitcher"], default="hitter",
+                    help="hitter = flagship (now-a-ball); pitcher = egregious "
+                         "robbed-pitcher (now-a-strike, gated)")
     ap.add_argument("--date")
     ap.add_argument("--inspect", action="store_true")
     args = ap.parse_args()
@@ -327,7 +429,10 @@ def main():
         start = (anchor - dt.timedelta(days=6)).isoformat()
         end = anchor.isoformat()
 
-    call = fetch_window(start, end, inspect=args.inspect)
+    if args.direction == "pitcher":
+        call = fetch_window_pitcher(start, end, inspect=args.inspect)
+    else:
+        call = fetch_window(start, end, inspect=args.inspect)
     if args.inspect:
         return
     if call is None:
