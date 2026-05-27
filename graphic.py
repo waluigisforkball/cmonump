@@ -118,24 +118,14 @@ def render(call, out_path, pitcher=False):
 
     if not pitcher:
         # FLAGSHIP: pitch is outside the zone. Clamp into frame, draw the dot,
-        # then a dashed leader line from the nearest zone edge to the ball.
+        # and label the miss. (No leader line — the number carries the distance.)
         m = ball_r+0.02; dx = min(max(dx, m), 1-m); dy = min(max(dy, 0.30), 0.78)
         ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
                      linewidth=2, zorder=5))
         if "high" in mdir or "low" in mdir:
-            edge_y = by1 if "high" in mdir else by0; ex = min(max(dx, bx0), bx1)
-            g = ball_r+0.012; stop = dy-g if dy > edge_y else dy+g
-            if abs(stop-edge_y) > 0.01:
-                ax.annotate("", xy=(ex, stop), xytext=(ex, edge_y),
-                    arrowprops=dict(arrowstyle="-", linestyle=(0,(3,2)), color=ACCENT, lw=2), zorder=4)
             ax.text(dx+ball_r+0.03, dy, f'{miss:.1f}"', ha="left", va="center",
                     fontsize=13, fontweight="black", color="#ffffff", family=fam, zorder=6)
         else:
-            edge_x = bx1 if dx > zcx else bx0; g = ball_r+0.012
-            stop = dx-g if dx > edge_x else dx+g
-            if abs(stop-edge_x) > 0.01:
-                ax.annotate("", xy=(stop, dy), xytext=(edge_x, dy),
-                    arrowprops=dict(arrowstyle="-", linestyle=(0,(3,2)), color=ACCENT, lw=2), zorder=4)
             ax.text(dx, dy+ball_r+0.03, f'{miss:.1f}"', ha="center", va="bottom",
                     fontsize=13, fontweight="black", color="#ffffff", family=fam, zorder=6)
         # verdict
@@ -144,18 +134,10 @@ def render(call, out_path, pitcher=False):
     else:
         # ROBBED PITCHER: pitch is INSIDE the zone (in_zone enforced upstream).
         # Draw the dot at its true spot — no clamping that would shove it out of
-        # the box — with a dashed leader line to dead-center and a center-distance
-        # label. The dot sitting inside the box IS the argument.
+        # the box — and label the center distance. The dot sitting inside the
+        # box IS the argument; no leader line needed.
         ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
                      linewidth=2, zorder=5))
-        # dashed line from zone center to the ball edge
-        g = ball_r+0.012
-        ddx, ddy = dx-zcx, dy-zcy
-        dist = (ddx**2 + ddy**2) ** 0.5
-        if dist > g:
-            ux, uy = ddx/dist, ddy/dist
-            ax.annotate("", xy=(dx-ux*g, dy-uy*g), xytext=(zcx, zcy),
-                arrowprops=dict(arrowstyle="-", linestyle=(0,(3,2)), color=ACCENT, lw=2), zorder=4)
         # label offset outward from center so it never sits under the dot
         lx = dx + (ball_r+0.03 if dx >= zcx else -(ball_r+0.03))
         ha = "left" if dx >= zcx else "right"
