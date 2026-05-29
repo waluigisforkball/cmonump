@@ -41,17 +41,78 @@ def _run_pitcher_daily(start: str, end: str, dry_run: bool) -> int:
     return 0 if uri else 1
 
 
+def _print_leaderboard_rows(rows: list):
+    """Console summary of a leaderboard result (DunkCall isn't JSON-friendly)."""
+    out = []
+    for i, r in enumerate(rows, 1):
+        wc = r.get("worst_call")
+        out.append({
+            "rank": i,
+            "ump": r.get("ump"),
+            "total_inches": r.get("total_inches"),
+            "count": r.get("count"),
+            "worst": (f'{getattr(wc, "miss_inches", 0):.1f}" vs '
+                      f'{getattr(wc, "batter", "")}' if wc else ""),
+        })
+    print("[main] leaderboard:\n" + json.dumps(out, indent=2))
+
+
 def run(window: str, anchor_date: str | None, dry_run: bool):
     anchor = (dt.date.fromisoformat(anchor_date) if anchor_date
               else dt.date.today() - dt.timedelta(days=1))
     if window == "day":
         start = end = anchor.isoformat()
-    else:
+    elif window == "week":
         start = (anchor - dt.timedelta(days=6)).isoformat()
         end = anchor.isoformat()
+    elif window == "month":
+        # prior calendar month relative to the anchor (default: yesterday)
+        first_this = anchor.replace(day=1)
+        last_prev = first_this - dt.timedelta(days=1)
+        start = last_prev.replace(day=1).isoformat()
+        end = last_prev.isoformat()
+    else:  # year — bracket the regular season; completion is gated upstream
+        start = f"{anchor.year}-03-01"
+        end = f"{anchor.year}-11-30"
     print(f"[main] window={window} range={start}..{end} dry_run={dry_run}")
 
     import post as post_mod
+
+    # ----- MONTHLY: worst-umps recap list -----
+    if window == "month":
+        rows = fetch_mod.fetch_window_leaderboard(start, end, top_n=5)
+        if not rows:
+            print("[main] No overturned calls this month. Nothing to post.")
+            return 0
+        period = dt.date.fromisoformat(start).strftime("%B")  # e.g. "May"
+        _print_leaderboard_rows(rows)
+        img = graphic_mod.render_leaderboard_list(rows, "card.png", period)
+        print(f"[main] rendered {img}")
+        caption = post_mod.build_caption_monthly(rows, period)
+        if dry_run:
+            print("[main] DRY RUN — skipping Bluesky post.")
+            print("\n--- caption preview ---\n" + caption)
+            return 0
+        uri = post_mod.post_leaderboard(caption, img, "monthly")
+        return 0 if uri else 1
+
+    # ----- YEARLY: Hall of Shame podium -----
+    if window == "year":
+        rows = fetch_mod.fetch_window_leaderboard(start, end, top_n=5)
+        if not rows:
+            print("[main] No overturned calls this year. Nothing to post.")
+            return 0
+        year = dt.date.fromisoformat(start).year
+        _print_leaderboard_rows(rows)
+        img = graphic_mod.render_leaderboard_podium(rows, "card.png", str(year))
+        print(f"[main] rendered {img}")
+        caption = post_mod.build_caption_yearly(rows, year)
+        if dry_run:
+            print("[main] DRY RUN — skipping Bluesky post.")
+            print("\n--- caption preview ---\n" + caption)
+            return 0
+        uri = post_mod.post_leaderboard(caption, img, "yearly")
+        return 0 if uri else 1
 
     # ----- WEEKLY: top-3 ranked card (flagship hitter direction only) -----
     if window == "week":
@@ -104,7 +165,8 @@ def run(window: str, anchor_date: str | None, dry_run: bool):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--window", choices=["day", "week"], default="day")
+    ap.add_argument("--window", choices=["day", "week", "month", "year"],
+                    default="day")
     ap.add_argument("--date", help="anchor date YYYY-MM-DD (default yesterday)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--inspect", action="store_true")

@@ -411,12 +411,120 @@ def fetch_window_pitcher(start: str, end: str, gate: float = PITCHER_GATE_INCHES
     return min(qualified, key=lambda c: (c.center_inches, -c.leverage))
 
 
+def fetch_window_leaderboard(start: str, end: str, top_n: int = 5,
+                             inspect: bool = False):
+    """Aggregate overturned called-strikes (HITTER direction only) by umpire
+    across the window and rank umps by SUM of miss_inches (descending).
+
+    Returns a list of dicts (length <= top_n), each:
+      {
+        "ump":          str,    # umpire name ("Blue" if the feed had none)
+        "total_inches": float,  # sum of miss_inches across their overturns
+        "count":        int,    # number of overturned called-strikes
+        "worst_call":   DunkCall,  # their single highest-miss call
+      }
+
+    Ranking is locked: severity-weighted sum, descending. No games-worked floor.
+    Calls with no umpire name in the feed are bucketed under "Blue" so the worst
+    call is still surfaced rather than silently dropped.
+    """
+    d0 = dt.date.fromisoformat(start)
+    d1 = dt.date.fromisoformat(end)
+
+    # ump_name -> {"total": float, "count": int, "worst": DunkCall}
+    agg: dict = {}
+    day = d0
+    while day <= d1:
+        pks = _game_pks(day.isoformat())
+        print(f"[fetch] (leaderboard) {day} -> {len(pks)} games", file=sys.stderr)
+        for pk in pks:
+            for c in _overturned_strikes_in_game(pk):   # hitter direction only
+                ump = (str(c.ump or "").strip() or "Blue")
+                bucket = agg.get(ump)
+                if bucket is None:
+                    agg[ump] = {"total": c.miss_inches, "count": 1, "worst": c}
+                else:
+                    bucket["total"] += c.miss_inches
+                    bucket["count"] += 1
+                    if c.miss_inches > bucket["worst"].miss_inches:
+                        bucket["worst"] = c
+        day += dt.timedelta(days=1)
+
+    rows = [
+        {"ump": ump, "total_inches": round(v["total"], 1),
+         "count": v["count"], "worst_call": v["worst"]}
+        for ump, v in agg.items()
+    ]
+    # rank by total miss inches desc; count then worst-miss break ties
+    rows.sort(key=lambda r: (r["total_inches"], r["count"],
+                             r["worst_call"].miss_inches), reverse=True)
+    rows = rows[:top_n]
+
+    if inspect:
+        print(f"=== leaderboard {start}..{end}: "
+              f"{len(agg)} umps with overturns ===")
+        for i, r in enumerate(rows, 1):
+            wc = r["worst_call"]
+            print(f'  {i}. {r["ump"]:<22} {r["total_inches"]:6.1f}"  '
+                  f'over {r["count"]} call(s)  '
+                  f'worst {wc.miss_inches:.1f}" vs {wc.batter}')
+        return None
+
+    return rows
+
+
+# All 30 MLB club team IDs (statsapi sportId=1). Used only by the yearly
+# completion gate; hardcoded so the gate doesn't depend on a roster endpoint.
+MLB_TEAM_IDS = (
+    108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
+    118, 119, 120, 121, 133, 134, 135, 136, 137, 138,
+    139, 140, 141, 142, 143, 144, 145, 146, 147, 158,
+)
+
+
+def is_regular_season_complete(year: int) -> bool:
+    """True only when EVERY MLB club has 162 completed (Final) regular-season
+    games on the schedule for `year`. Used to fire the yearly Hall of Shame the
+    day after the actual last regular-season game (handles rainout makeups),
+    rather than on a guessed calendar date.
+
+    One schedule call per team (~30 calls). Any fetch error or a single team
+    short of 162 Finals -> returns False (fail closed; never posts early).
+    """
+    sched_url = ("https://statsapi.mlb.com/api/v1/schedule"
+                 "?sportId=1&season={year}&gameType=R&teamId={tid}")
+    for tid in MLB_TEAM_IDS:
+        try:
+            data = _get(sched_url.format(year=year, tid=tid))
+        except Exception as e:
+            print(f"[fetch] season-complete check failed for team {tid}: {e}",
+                  file=sys.stderr)
+            return False
+        finals = 0
+        for d in data.get("dates", []):
+            for g in d.get("games", []):
+                state = str(g.get("status", {}).get("codedGameState", "")).upper()
+                if state == "F":      # Final
+                    finals += 1
+        if finals < 162:
+            print(f"[fetch] team {tid}: {finals}/162 finals — season not "
+                  f"complete", file=sys.stderr)
+            return False
+    print(f"[fetch] all 30 teams at 162 finals — {year} regular season complete",
+          file=sys.stderr)
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--window", choices=["day", "week"], default="day")
+    ap.add_argument("--window", choices=["day", "week", "month", "year"],
+                    default="day")
     ap.add_argument("--direction", choices=["hitter", "pitcher"], default="hitter",
                     help="hitter = flagship (now-a-ball); pitcher = egregious "
                          "robbed-pitcher (now-a-strike, gated)")
+    ap.add_argument("--leaderboard", action="store_true",
+                    help="run the worst-umps leaderboard for the window "
+                         "(month/year) instead of a single call")
     ap.add_argument("--date")
     ap.add_argument("--inspect", action="store_true")
     args = ap.parse_args()
@@ -425,9 +533,32 @@ def main():
               else dt.date.today() - dt.timedelta(days=1))
     if args.window == "day":
         start = end = anchor.isoformat()
-    else:
+    elif args.window == "week":
         start = (anchor - dt.timedelta(days=6)).isoformat()
         end = anchor.isoformat()
+    elif args.window == "month":
+        # prior calendar month, anchored to `anchor` (default: yesterday)
+        first_this = anchor.replace(day=1)
+        last_prev = first_this - dt.timedelta(days=1)
+        start = last_prev.replace(day=1).isoformat()
+        end = last_prev.isoformat()
+    else:  # year
+        start = f"{anchor.year}-03-01"
+        end = f"{anchor.year}-11-30"
+
+    if args.leaderboard or args.window in ("month", "year"):
+        rows = fetch_window_leaderboard(start, end, inspect=args.inspect)
+        if args.inspect:
+            return
+        if not rows:
+            print("NO_DUNK")
+            return
+        # DunkCall isn't JSON-serializable as-is; dump worst_call via asdict
+        print(json.dumps([
+            {"ump": r["ump"], "total_inches": r["total_inches"],
+             "count": r["count"], "worst_call": asdict(r["worst_call"])}
+            for r in rows]))
+        return
 
     if args.direction == "pitcher":
         call = fetch_window_pitcher(start, end, inspect=args.inspect)

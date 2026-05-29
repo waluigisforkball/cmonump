@@ -291,6 +291,229 @@ def render_top3(calls, out_path, date_range=""):
     plt.close(fig); return out_path
 
 
+MEDALS = {1: ("#e8b923", "#7a5c00"),   # gold  (fill, edge)
+          2: ("#c7ccd1", "#6b7178"),   # silver
+          3: ("#cd7f43", "#6e3d18")}   # bronze
+
+
+def render_leaderboard_list(ump_rows, out_path, period_label):
+    """Monthly '[Month] Recap' card — Layout A: sparse 5-row vertical list.
+    Each row: rank, ump name, total inches (accent), count, worst-call summary.
+    `ump_rows` = list of dicts from fetch_window_leaderboard."""
+    fam = _font()
+    fig, ax = plt.subplots(figsize=(6.4, 6.4), dpi=200)
+    fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
+
+    # top ribbon
+    ax.add_patch(Rectangle((0, 0.86), 1, 0.14, facecolor=ACCENT, zorder=2,
+                 transform=ax.transAxes))
+    title = f"{period_label.upper()} RECAP"
+    t = ax.text(0.5, 0.935, title, transform=ax.transAxes, ha="center",
+                va="center", fontsize=24, fontweight="black", color="#ffffff",
+                family=fam, zorder=3)
+    fig.canvas.draw()
+    r = t.get_window_extent().width / ax.get_window_extent().width
+    if r > 0.86:
+        t.set_fontsize(24 * 0.86 / r)
+    ax.text(0.5, 0.883, "WORST UMPS BY INCHES MISSED", transform=ax.transAxes,
+            ha="center", va="center", fontsize=8.5, fontweight="black",
+            color="#ffd2da", family=fam, zorder=3)
+
+    rows = list(ump_rows[:5])
+    # body spans y ~0.06 .. ~0.82; evenly split into 5 bands
+    n = max(1, len(rows))
+    top_y, bot_y = 0.82, 0.06
+    band = (top_y - bot_y) / 5.0     # fixed 5-band grid so spacing is stable
+    for i, row in enumerate(rows):
+        yc = top_y - band * (i + 0.5)
+        rank = i + 1
+        ump = str(row.get("ump", "") or "Blue").strip() or "Blue"
+        tot = float(row.get("total_inches", 0.0))
+        cnt = int(row.get("count", 0))
+        wc = row.get("worst_call")
+        wc_miss = float(getattr(wc, "miss_inches", 0.0)) if wc is not None else 0.0
+        wc_bat = str(getattr(wc, "batter", "") or "") if wc is not None else ""
+
+        # rank numeral (medal color for top 3, dim for 4–5)
+        rfill = MEDALS.get(rank, (DIM, DIM))[0]
+        ax.text(0.07, yc, str(rank), transform=ax.transAxes, ha="center",
+                va="center", fontsize=26, fontweight="black", color=rfill,
+                family=fam, zorder=4)
+
+        # ump name (primary)
+        ax.text(0.15, yc + 0.028, ump, transform=ax.transAxes, ha="left",
+                va="center", fontsize=15, fontweight="black", color=INK,
+                family=fam, zorder=4)
+        # worst-call summary (secondary, dim)
+        if wc_bat:
+            sub = f'worst: {wc_miss:.1f}" vs {wc_bat}'
+        else:
+            sub = f'worst: {wc_miss:.1f}"'
+        ax.text(0.15, yc - 0.030, sub, transform=ax.transAxes, ha="left",
+                va="center", fontsize=10, fontweight="bold", color=DIM,
+                family=fam, zorder=4)
+
+        # total inches (right, accent, the ranking metric) + count beneath
+        ax.text(0.93, yc + 0.028, f'{tot:.1f}"', transform=ax.transAxes,
+                ha="right", va="center", fontsize=19, fontweight="black",
+                color=ACCENT, family=fam, zorder=4)
+        cpl = "call" if cnt == 1 else "calls"
+        ax.text(0.93, yc - 0.030, f'{cnt} {cpl}', transform=ax.transAxes,
+                ha="right", va="center", fontsize=10, fontweight="bold",
+                color=DIM, family=fam, zorder=4)
+
+        # faint divider under each row except the last
+        if i < len(rows) - 1:
+            ax.plot([0.06, 0.94], [yc - band/2]*2, color="#2a313c", lw=1,
+                    zorder=2, transform=ax.transAxes)
+
+    fig.savefig(out_path, facecolor=BG, bbox_inches="tight", pad_inches=0.0)
+    plt.close(fig); return out_path
+
+
+def _podium_zone(ax, cx, yc, w, h, call):
+    """Small strike-zone with the worst-call dot, centered at (cx, yc) within a
+    box of width w / height h (axes coords). Honest ball outline; no glow, no
+    leader line — matches the cleaned daily card."""
+    if call is None:
+        return
+    top = float(getattr(call, "sz_top", 3.4)); bot = float(getattr(call, "sz_bot", 1.6))
+    px = float(getattr(call, "pX", 0.0)); pz = float(getattr(call, "pZ", top))
+    hw = PLATE_HALF_WIDTH_FT
+    ZX0, ZX1 = cx - w/2, cx + w/2
+    ZY0, ZY1 = yc - h/2, yc + h/2
+    zcx, zcy = cx, yc
+    zw_ft = 2*hw; zh_ft = max(0.1, top - bot)
+    s = min(w/zw_ft, h/zh_ft)
+    fx = lambda v: zcx + v*s
+    fy = lambda v: zcy + (v-(top+bot)/2)*s
+    bx0, bx1, by0, by1 = fx(-hw), fx(hw), fy(bot), fy(top)
+    ax.add_patch(Rectangle((bx0, by0), bx1-bx0, by1-by0, facecolor="#ffffff",
+                 alpha=0.06, zorder=8, transform=ax.transAxes))
+    ax.add_patch(Rectangle((bx0, by0), bx1-bx0, by1-by0, fill=False,
+                 edgecolor=ZONE_LINE, linewidth=2, zorder=9, transform=ax.transAxes))
+    ball_r = (2.9/2/12)*s
+    fill_r = _honest_fill_r(ball_r, 1.5)
+    dx, dy = fx(px), fy(pz)
+    # clamp the dot to within a hair of the zone-box edges so an extreme miss
+    # still renders cleanly inside the row rather than spilling out the side
+    dx = min(max(dx, bx0 + fill_r), bx1 - fill_r)
+    dy = min(max(dy, by0 + fill_r), by1 - fill_r)
+    ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
+                 linewidth=1.5, zorder=10, transform=ax.transAxes))
+
+
+def render_leaderboard_podium(ump_rows, out_path, period_label):
+    """Yearly 'Hall of Shame' card — Layout C: top 3 on a podium with medals +
+    mini strike-zone of their worst call; rows 4–5 as compact text mentions.
+    #1 is tagged 'THE SPECTACLE'. `period_label` is the year, e.g. '2026'."""
+    fam = _font()
+    fig, ax = plt.subplots(figsize=(6.4, 6.4), dpi=200)
+    fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
+
+    # top ribbon
+    ax.add_patch(Rectangle((0, 0.86), 1, 0.14, facecolor=ACCENT, zorder=2,
+                 transform=ax.transAxes))
+    t = ax.text(0.5, 0.935, f"{period_label} HALL OF SHAME", transform=ax.transAxes,
+                ha="center", va="center", fontsize=24, fontweight="black",
+                color="#ffffff", family=fam, zorder=3)
+    fig.canvas.draw()
+    r = t.get_window_extent().width / ax.get_window_extent().width
+    if r > 0.86:
+        t.set_fontsize(24 * 0.86 / r)
+    ax.text(0.5, 0.883, "WORST UMPS BY INCHES MISSED", transform=ax.transAxes,
+            ha="center", va="center", fontsize=8.5, fontweight="black",
+            color="#ffd2da", family=fam, zorder=3)
+
+    rows = list(ump_rows[:5])
+    top3 = rows[:3]
+    mentions = rows[3:5]
+
+    # ---- PODIUM (top 3): three columns. Each block holds, top→bottom:
+    # medal badge (corner) · mini strike-zone · ump · total · count.
+    # Block heights differ (gold tallest) but all share the same bottom edge so
+    # the internal stack starts just under each block's top.
+    # rank -> (center_x, block_top_y)
+    cols = {1: (0.50, 0.80), 2: (0.205, 0.72), 3: (0.795, 0.67)}
+    block_bottom = 0.20
+    bw = 0.28
+    order = [2, 1, 3]  # silver, gold, bronze L→R
+    for rank in order:
+        if rank > len(top3):
+            continue
+        row = top3[rank - 1]
+        cx, block_top = cols[rank]
+        ump = str(row.get("ump", "") or "Blue").strip() or "Blue"
+        tot = float(row.get("total_inches", 0.0))
+        cnt = int(row.get("count", 0))
+        wc = row.get("worst_call")
+        fill, edge = MEDALS[rank]
+
+        # podium block
+        ax.add_patch(Rectangle((cx - bw/2, block_bottom), bw,
+                     block_top - block_bottom, facecolor=PANEL, edgecolor=edge,
+                     linewidth=2, zorder=4, transform=ax.transAxes))
+
+        # medal badge — top-left corner of the block
+        bxc, byc = cx - bw/2 + 0.045, block_top - 0.045
+        ax.add_patch(Circle((bxc, byc), 0.034, facecolor=fill, edgecolor=edge,
+                     linewidth=2.5, zorder=8, transform=ax.transAxes))
+        ax.text(bxc, byc, str(rank), transform=ax.transAxes, ha="center",
+                va="center", fontsize=15, fontweight="black", color="#1a1407",
+                family=fam, zorder=9)
+
+        # mini strike-zone INSIDE the block, just under the top edge
+        _podium_zone(ax, cx + 0.03, block_top - 0.075, 0.115, 0.13, wc)
+
+        # text stack below the zone
+        ax.text(cx, block_top - 0.175, ump, transform=ax.transAxes, ha="center",
+                va="center", fontsize=11, fontweight="black", color=INK,
+                family=fam, zorder=7)
+        ax.text(cx, block_top - 0.215, f'{tot:.1f}"', transform=ax.transAxes,
+                ha="center", va="center", fontsize=15, fontweight="black",
+                color=ACCENT, family=fam, zorder=7)
+        cpl = "call" if cnt == 1 else "calls"
+        ax.text(cx, block_top - 0.250, f'{cnt} {cpl}', transform=ax.transAxes,
+                ha="center", va="center", fontsize=8.5, fontweight="bold",
+                color=DIM, family=fam, zorder=7)
+
+        # "THE SPECTACLE" tag — its own clear band above the gold block
+        if rank == 1:
+            ax.text(cx, block_top + 0.035, "THE SPECTACLE", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=12, fontweight="black",
+                    color="#e8b923", family=fam, zorder=8)
+
+    # ---- HONORABLE MENTIONS (rows 4–5) : compact text rows along the bottom ---
+    if mentions:
+        ax.plot([0.06, 0.94], [0.165, 0.165], color="#2a313c", lw=1, zorder=3,
+                transform=ax.transAxes)
+        ax.text(0.06, 0.135, "HONORABLE MENTIONS", transform=ax.transAxes,
+                ha="left", va="center", fontsize=8, fontweight="black",
+                color=DIM, family=fam, zorder=4)
+        my = 0.095
+        for j, row in enumerate(mentions):
+            rank = 4 + j
+            ump = str(row.get("ump", "") or "Blue").strip() or "Blue"
+            tot = float(row.get("total_inches", 0.0))
+            cnt = int(row.get("count", 0))
+            cpl = "call" if cnt == 1 else "calls"
+            ax.text(0.06, my, f'{rank}.', transform=ax.transAxes, ha="left",
+                    va="center", fontsize=12, fontweight="black", color=DIM,
+                    family=fam, zorder=4)
+            ax.text(0.13, my, ump, transform=ax.transAxes, ha="left",
+                    va="center", fontsize=12, fontweight="black", color=INK,
+                    family=fam, zorder=4)
+            ax.text(0.93, my, f'{tot:.1f}"  ·  {cnt} {cpl}', transform=ax.transAxes,
+                    ha="right", va="center", fontsize=11, fontweight="bold",
+                    color=ACCENT, family=fam, zorder=4)
+            my -= 0.052
+
+    fig.savefig(out_path, facecolor=BG, bbox_inches="tight", pad_inches=0.0)
+    plt.close(fig); return out_path
+
+
 if __name__ == "__main__":
     render(dict(pitcher="Eury Pérez", batter="Bo Bichette", balls=3, strikes=1,
         inning=7, half="top", ump="Carlos Torres", miss_inches=4.9, miss_dir="high",

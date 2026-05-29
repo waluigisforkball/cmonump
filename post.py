@@ -126,7 +126,7 @@ def post_text_image(caption: str, image_path: str, alt_call: dict):
                     break
         tb = (client_utils.TextBuilder()
               .text(base + "\n\n")
-              .link("Watch #1 \u2192", link)
+              .link("#1 on Savant \u2192", link)
               .text("\n#MLB #ABS"))
         resp = client.send_image(text=tb, image=img_bytes, image_alt=alt)
     else:
@@ -169,7 +169,7 @@ def post(call: dict, image_path: str, window: str):
                 f'{call["balls"]}-{call["strikes"]} in the {half} of {inn}.\n'
                 f'{ump} called this {miss:.1f}" {dir_word} the zone a strike. '
                 f"It was not.\n\n")
-          .link("Watch the play \u2192", call["savant_link"])
+          .link("Game on Savant \u2192", call["savant_link"])
           .text("\n#MLB #ABS"))
 
     client = Client()
@@ -215,7 +215,7 @@ def post_pitcher(call: dict, image_path: str):
                 f'{call["balls"]}-{call["strikes"]} in the {half} of {inn}.\n'
                 f'{center:.1f}" from dead center. {ump} called it a ball. '
                 f"It was a strike.\n\n")
-          .link("Watch the play \u2192", call["savant_link"])
+          .link("Game on Savant \u2192", call["savant_link"])
           .text("\n#MLB #ABS"))
 
     client = Client()
@@ -228,6 +228,93 @@ def post_pitcher(call: dict, image_path: str):
     resp = client.send_image(text=tb, image=img_bytes, image_alt=alt)
     uri = getattr(resp, "uri", None)
     print(f"[post] posted: {uri}")
+    return uri
+
+
+def _ordinal_inches(x: float) -> str:
+    return f'{x:.1f}"'
+
+
+def build_caption_monthly(ump_rows: list, period_label: str) -> str:
+    """Ceremonial-deadpan monthly recap caption. `ump_rows` is the list of dicts
+    from fetch_window_leaderboard (ump, total_inches, count, worst_call).
+    `period_label` is the month name, e.g. "May"."""
+    head = f"Presenting the {period_label} Recap."
+    lines = [head, ""]
+    for i, r in enumerate(ump_rows[:5], 1):
+        ump = str(r.get("ump", "") or "Blue").strip() or "Blue"
+        tot = float(r.get("total_inches", 0.0))
+        cnt = int(r.get("count", 0))
+        plural = "overturn" if cnt == 1 else "overturns"
+        lines.append(f'{i}) {ump} — {tot:.1f}" missed across {cnt} {plural}.')
+    body = "\n".join(lines)
+    tail = "\n\n#MLB #ABS"
+    cap = body + tail
+    # Bluesky hard cap is 300 graphemes; trim extra rows before the tail if long
+    if len(cap) > 300:
+        while len(lines) > 3 and len("\n".join(lines) + tail) > 300:
+            lines.pop()
+        cap = "\n".join(lines) + tail
+    return cap[:300]
+
+
+def build_caption_yearly(ump_rows: list, year) -> str:
+    """Ceremonial awards-announcement caption for the yearly Hall of Shame.
+    The #1 ump receives "The Spectacle". Runner-ups listed after."""
+    if not ump_rows:
+        return f"The {year} Hall of Shame is empty. Somehow.\n\n#MLB #ABS"
+    win = ump_rows[0]
+    wump = str(win.get("ump", "") or "Blue").strip() or "Blue"
+    wtot = float(win.get("total_inches", 0.0))
+    wcnt = int(win.get("count", 0))
+    wpl = "overturn" if wcnt == 1 else "overturns"
+    line1 = f"The {year} Spectacle goes to {wump}."
+    line2 = f'{wtot:.1f}" missed across {wcnt} {wpl}.'
+
+    runners = []
+    for r in ump_rows[1:5]:
+        ump = str(r.get("ump", "") or "Blue").strip() or "Blue"
+        runners.append(f'{ump} ({float(r.get("total_inches", 0.0)):.1f}")')
+    line3 = ("Hall of Shame complete: " + ", ".join(runners) + "."
+             if runners else "")
+
+    body = "\n".join([line1, line2] + ([line3] if line3 else []))
+    tail = "\n\n#MLB #ABS"
+    cap = body + tail
+    if len(cap) > 300:
+        # drop runner-ups first, then fall back to just the headline
+        cap = ("\n".join([line1, line2]) + tail)
+        if len(cap) > 300:
+            cap = (line1 + tail)
+    return cap[:300]
+
+
+def post_leaderboard(caption: str, image_path: str, kind: str):
+    """Post a monthly/yearly leaderboard card. No clickable link facet — there's
+    no single call to point at — so the caption text posts as-is. `kind` is
+    "monthly" or "yearly", used only for the alt text."""
+    handle = os.environ.get("BLUESKY_HANDLE")
+    app_pw = os.environ.get("BLUESKY_APP_PASSWORD")
+    if not handle or not app_pw:
+        print("[post] Missing BLUESKY_HANDLE / BLUESKY_APP_PASSWORD env vars.",
+              file=sys.stderr)
+        return None
+    if kind == "yearly":
+        alt = ("Yearly Hall of Shame card: a podium ranking the five umpires "
+               "with the most total inches missed on overturned ABS challenge "
+               "called-strikes, top three shown with medals and strike-zone "
+               "graphics of their worst call.")
+    else:
+        alt = ("Monthly recap card: a ranked list of the five umpires with the "
+               "most total inches missed on overturned ABS challenge "
+               "called-strikes for the month, with each one's worst call.")
+    client = Client()
+    client.login(handle, app_pw)
+    with open(image_path, "rb") as f:
+        img_bytes = f.read()
+    resp = client.send_image(text=caption, image=img_bytes, image_alt=alt)
+    uri = getattr(resp, "uri", None)
+    print(f"[post] posted ({kind}): {uri}")
     return uri
 
 
