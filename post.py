@@ -268,7 +268,7 @@ def build_caption_yearly(ump_rows: list, year) -> str:
     wtot = float(win.get("total_inches", 0.0))
     wcnt = int(win.get("count", 0))
     wpl = "overturn" if wcnt == 1 else "overturns"
-    line1 = f"The {year} Spectacle goes to {wump}."
+    line1 = f"{year} Hall of Shame. Worst ump of the season: {wump}."
     line2 = f'{wtot:.1f}" missed across {wcnt} {wpl}.'
 
     runners = []
