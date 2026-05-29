@@ -1,16 +1,19 @@
 name: ABS Dunk Bot
 on:
   schedule:
-    - cron: "0 14 * * *"
-    - cron: "0 15 * * 1"
+    - cron: "0 14 * * *"        # daily flagship + robbed-pitcher
+    - cron: "0 15 * * 1"        # weekly top-3 (Mondays)
+    - cron: "0 14 1 * *"        # monthly recap (1st of month)
+    - cron: "0 14 25-30 9 *"    # yearly check, late Sep (posts only if season done)
+    - cron: "0 14 1-10 10 *"    # yearly check, early Oct (posts only if season done)
   workflow_dispatch:
     inputs:
       window:
-        description: "day or week"
+        description: "day, week, month, or year"
         required: true
         default: "day"
         type: choice
-        options: [day, week]
+        options: [day, week, month, year]
       dry_run:
         description: "dry run (build but do not post)"
         required: false
