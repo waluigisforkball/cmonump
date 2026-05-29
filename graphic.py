@@ -373,16 +373,16 @@ def render_leaderboard_list(ump_rows, out_path, period_label):
 
 
 def _podium_zone(ax, cx, yc, w, h, call):
-    """Small strike-zone with the worst-call dot, centered at (cx, yc) within a
-    box of width w / height h (axes coords). Honest ball outline; no glow, no
-    leader line — matches the cleaned daily card."""
+    """Small strike-zone with the worst-call dot, centered at (cx, yc). The box
+    is sized to `w`/`h` but the dot is allowed to sit OUTSIDE it — an overturned
+    called strike missed the zone, so an honest dot belongs outside the box
+    (same as the daily/weekly cards). Clamped only to a margin around the box so
+    an extreme miss still renders on-card. Honest ball outline; no glow/leader."""
     if call is None:
         return
     top = float(getattr(call, "sz_top", 3.4)); bot = float(getattr(call, "sz_bot", 1.6))
     px = float(getattr(call, "pX", 0.0)); pz = float(getattr(call, "pZ", top))
     hw = PLATE_HALF_WIDTH_FT
-    ZX0, ZX1 = cx - w/2, cx + w/2
-    ZY0, ZY1 = yc - h/2, yc + h/2
     zcx, zcy = cx, yc
     zw_ft = 2*hw; zh_ft = max(0.1, top - bot)
     s = min(w/zw_ft, h/zh_ft)
@@ -396,18 +396,21 @@ def _podium_zone(ax, cx, yc, w, h, call):
     ball_r = (2.9/2/12)*s
     fill_r = _honest_fill_r(ball_r, 1.5)
     dx, dy = fx(px), fy(pz)
-    # clamp the dot to within a hair of the zone-box edges so an extreme miss
-    # still renders cleanly inside the row rather than spilling out the side
-    dx = min(max(dx, bx0 + fill_r), bx1 - fill_r)
-    dy = min(max(dy, by0 + fill_r), by1 - fill_r)
+    # allow the dot OUTSIDE the box; clamp only to a margin around it so a huge
+    # miss still lands on-card (the dot outside the box IS the point).
+    margin = w * 0.55
+    dx = min(max(dx, bx0 - margin), bx1 + margin)
+    dy = min(max(dy, by0 - margin), by1 + margin)
     ax.add_patch(Circle((dx, dy), fill_r, facecolor=ACCENT, edgecolor="#ffffff",
-                 linewidth=1.5, zorder=10, transform=ax.transAxes))
+                 linewidth=1.5, zorder=11, transform=ax.transAxes))
 
 
 def render_leaderboard_podium(ump_rows, out_path, period_label):
     """Yearly 'Hall of Shame' card — Layout C: top 3 on a podium with medals +
-    mini strike-zone of their worst call; rows 4–5 as compact text mentions.
-    #1 is tagged 'THE SPECTACLE'. `period_label` is the year, e.g. '2026'."""
+    mini strike-zone of their worst call (dot shown honestly outside the box);
+    rows 4–5 as compact text mentions. The big accent number is the season total
+    (the ranking metric); 'worst: X"' labels the single worst call shown as the
+    dot. `period_label` is the year, e.g. '2026'."""
     fam = _font()
     fig, ax = plt.subplots(figsize=(6.4, 6.4), dpi=200)
     fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
@@ -436,7 +439,7 @@ def render_leaderboard_podium(ump_rows, out_path, period_label):
     # Block heights differ (gold tallest) but all share the same bottom edge so
     # the internal stack starts just under each block's top.
     # rank -> (center_x, block_top_y)
-    cols = {1: (0.50, 0.80), 2: (0.205, 0.72), 3: (0.795, 0.67)}
+    cols = {1: (0.50, 0.78), 2: (0.205, 0.70), 3: (0.795, 0.65)}
     block_bottom = 0.20
     bw = 0.28
     order = [2, 1, 3]  # silver, gold, bronze L→R
@@ -449,6 +452,7 @@ def render_leaderboard_podium(ump_rows, out_path, period_label):
         tot = float(row.get("total_inches", 0.0))
         cnt = int(row.get("count", 0))
         wc = row.get("worst_call")
+        wc_miss = float(getattr(wc, "miss_inches", 0.0)) if wc is not None else 0.0
         fill, edge = MEDALS[rank]
 
         # podium block
@@ -459,31 +463,30 @@ def render_leaderboard_podium(ump_rows, out_path, period_label):
         # medal badge — top-left corner of the block
         bxc, byc = cx - bw/2 + 0.045, block_top - 0.045
         ax.add_patch(Circle((bxc, byc), 0.034, facecolor=fill, edgecolor=edge,
-                     linewidth=2.5, zorder=8, transform=ax.transAxes))
+                     linewidth=2.5, zorder=12, transform=ax.transAxes))
         ax.text(bxc, byc, str(rank), transform=ax.transAxes, ha="center",
                 va="center", fontsize=15, fontweight="black", color="#1a1407",
-                family=fam, zorder=9)
+                family=fam, zorder=13)
 
-        # mini strike-zone INSIDE the block, just under the top edge
-        _podium_zone(ax, cx + 0.03, block_top - 0.075, 0.115, 0.13, wc)
+        # mini strike-zone in the block's upper area, with margin all around so
+        # the (now honest) outside dot has room to sit beyond the box edge
+        _podium_zone(ax, cx + 0.02, block_top - 0.105, 0.10, 0.115, wc)
 
-        # text stack below the zone
-        ax.text(cx, block_top - 0.175, ump, transform=ax.transAxes, ha="center",
+        # text stack below the zone:
+        #   ump · season total (ranking metric) · count · worst single call
+        ax.text(cx, block_top - 0.205, ump, transform=ax.transAxes, ha="center",
                 va="center", fontsize=11, fontweight="black", color=INK,
                 family=fam, zorder=7)
-        ax.text(cx, block_top - 0.215, f'{tot:.1f}"', transform=ax.transAxes,
-                ha="center", va="center", fontsize=15, fontweight="black",
+        ax.text(cx, block_top - 0.245, f'{tot:.1f}"', transform=ax.transAxes,
+                ha="center", va="center", fontsize=16, fontweight="black",
                 color=ACCENT, family=fam, zorder=7)
         cpl = "call" if cnt == 1 else "calls"
-        ax.text(cx, block_top - 0.250, f'{cnt} {cpl}', transform=ax.transAxes,
+        ax.text(cx, block_top - 0.280, f'{cnt} {cpl}', transform=ax.transAxes,
                 ha="center", va="center", fontsize=8.5, fontweight="bold",
                 color=DIM, family=fam, zorder=7)
-
-        # "THE SPECTACLE" tag — its own clear band above the gold block
-        if rank == 1:
-            ax.text(cx, block_top + 0.035, "THE SPECTACLE", transform=ax.transAxes,
-                    ha="center", va="center", fontsize=12, fontweight="black",
-                    color="#e8b923", family=fam, zorder=8)
+        ax.text(cx, block_top - 0.315, f'worst: {wc_miss:.1f}"',
+                transform=ax.transAxes, ha="center", va="center", fontsize=8.5,
+                fontweight="bold", color=DIM, family=fam, zorder=7)
 
     # ---- HONORABLE MENTIONS (rows 4–5) : compact text rows along the bottom ---
     if mentions:
