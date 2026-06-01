@@ -58,15 +58,23 @@ def _print_leaderboard_rows(rows: list):
 
 
 def run(window: str, anchor_date: str | None, dry_run: bool):
-    anchor = (dt.date.fromisoformat(anchor_date) if anchor_date
-              else dt.date.today() - dt.timedelta(days=1))
+    # daily/weekly post yesterday's calls, so the anchor is yesterday.
+    # monthly/yearly windows are computed from calendar boundaries and must
+    # anchor on TODAY — otherwise the 1st-of-month run sees "yesterday" (the
+    # last day of last month) and walks back one month too far.
+    if anchor_date:
+        anchor = dt.date.fromisoformat(anchor_date)
+    elif window in ("month", "year"):
+        anchor = dt.date.today()
+    else:
+        anchor = dt.date.today() - dt.timedelta(days=1)
     if window == "day":
         start = end = anchor.isoformat()
     elif window == "week":
         start = (anchor - dt.timedelta(days=6)).isoformat()
         end = anchor.isoformat()
     elif window == "month":
-        # prior calendar month relative to the anchor (default: yesterday)
+        # prior calendar month relative to the anchor (today on a scheduled run)
         first_this = anchor.replace(day=1)
         last_prev = first_this - dt.timedelta(days=1)
         start = last_prev.replace(day=1).isoformat()
